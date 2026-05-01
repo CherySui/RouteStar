@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteStar Launcher</title>
+    <link rel="stylesheet" href="fonts/inter.css">
+    <link rel="stylesheet" href="fonts/material-symbols.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <video id="home-bg-video" autoplay loop muted class="global-bg-video"></video>
+    <div id="global-bg-image" class="global-bg-image"></div>
+    <div id="transition-curtain" class="transition-curtain"></div>
+    <div id="global-overlay" class="home-overlay"></div>
+
+    <div class="app-layout">
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <span class="material-symbols-outlined app-icon" id="main-logo" style="cursor: context-menu;">widgets</span>
+                <div class="separator"></div>
+                <!-- 米哈游官方游戏容器 -->
+                <div class="app-list" id="hoyo-app-list">
+                    <!-- 动态渲染游戏图标 -->
+                </div>
+                <div class="app-slot" id="add-hoyo-game-btn" title="获取米哈游游戏">
+                    <span class="material-symbols-outlined">add</span>
+                </div>
+                <div class="separator"></div>
+                <!-- 自添加应用容器 -->
+                <div class="app-list" id="custom-app-list">
+                    <div class="app-slot" id="add-app-btn">
+                        <span class="material-symbols-outlined">add</span>
+                    </div>
+                </div>
+            </div>
+            <div class="top-bar-right"></div>
+        </header>
+
+        <main class="main-content">
+            <div id="home-empty" class="home-page-empty active">
+                <p style="color: var(--text-secondary);">点击顶栏的 <span style="color:rgba(255,255,255,0.7);font-weight:600;">+</span> 号来添加游戏或应用</p>
+            </div>
+            
+            <div id="home-app" class="home-page" style="display: none;">
+                <div class="home-top-left">
+                    <h1 id="home-app-title" class="home-title">应用名称</h1>
+                    <p id="home-app-desc" class="home-desc">暂无简介</p>
+                </div>
+                <div class="home-bottom-left">
+                    <div class="todo-panel">
+                        <div class="todo-stat">
+                            <span>使用时间</span>
+                            <span id="home-usage-time" class="stat-value">0 h 0 min 0 s</span>
+                        </div>
+                        <div class="todo-list" id="todo-list">
+                            <p class="empty-state">暂无待办</p>
+                        </div>
+                        <div class="todo-input-group">
+                            <input type="text" id="todo-input-field" placeholder="添加待办..." class="todo-input">
+                            <button class="todo-add" id="btn-add-todo">添加</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="home-bottom-center">
+                    <p class="tips-text" id="tip-text">Tips：你以为是崩坏，其实是自动保存没跟上。</p>
+                </div>
+                <div class="home-bottom-right">
+                    <button id="launch-app-btn" class="launch-btn-yellow">启动</button>
+                    <button id="app-settings-btn" class="settings-hamburger-btn">
+                        <span class="material-symbols-outlined">menu</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="tools-page" class="tools-page" style="display: none;">
+                <nav class="tools-sidebar">
+                    <div class="sidebar-item" data-tab="tool-hoyo-gacha">
+                        <span class="material-symbols-outlined">history</span>HoYo抽卡记录提取
+                    </div>
+                    <div class="sidebar-item" data-tab="tool-hoyoshade">
+                        <span class="material-symbols-outlined">filter_b_and_w</span>HoYoShade
+                    </div>
+                    <div class="sidebar-separator"></div>
+                    <div class="sidebar-item" data-tab="tool-preferences">
+                        <span class="material-symbols-outlined">settings</span>偏好设置
+                    </div>
+                </nav>
+                
+                <div class="tools-content">
+                    <div id="tab-tool-hoyo-gacha" class="tools-tab-pane">
+                        <div class="gacha-header">
+                            <div class="gacha-game-tabs">
+                                <button class="gacha-tab active" data-biz="hkrpg_cn">
+                                    <span class="tab-dot" style="background:#818cf8"></span>星穹铁道
+                                </button>
+                                <button class="gacha-tab" data-biz="hk4e_cn">
+                                    <span class="tab-dot" style="background:#34d399"></span>原神
+                                </button>
+                                <button class="gacha-tab" data-biz="nap_cn">
+                                    <span class="tab-dot" style="background:#f472b6"></span>绝区零
+                                </button>
+                                <div class="gacha-tab-separator"></div>
+                                <button class="gacha-tab small" data-biz="hkrpg_global">国际·星铁</button>
+                                <button class="gacha-tab small" data-biz="hk4e_global">国际·原神</button>
+                                <button class="gacha-tab small" data-biz="nap_global">国际·绝区</button>
+                            </div>
+                            <button id="btn-extract-gacha" class="gacha-extract-btn">
+                                <span class="material-symbols-outlined">download</span>
+                                一键提取
+                            </button>
+                        </div>
+
+                        <div id="gacha-status-panel" class="gacha-status-panel" style="display:none;">
+                            <div class="spinner"></div>
+                            <span id="gacha-status-text">正在初始化...</span>
+                        </div>
+
+                        <div id="gacha-result-container" class="gacha-result-container">
+                            <div class="gacha-empty-state">
+                                <div class="gacha-empty-icon">
+                                    <span class="material-symbols-outlined">query_stats</span>
+                                </div>
+                                <p class="gacha-empty-title">暂无数据</p>
+                                <p class="gacha-empty-hint">选择游戏后点击"一键提取"<br>请确保近期在游戏中打开过抽卡历史页面</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="tab-tool-hoyoshade" class="tools-tab-pane">
+                        <div class="settings-section" style="text-align:center;padding:60px 20px;">
+                            <span class="material-symbols-outlined" style="font-size:64px;color:#facc15;margin-bottom:24px;opacity:0.5;">filter_b_and_w</span>
+                            <h2 style="margin-top:0;">HoYoShade</h2>
+                            <p class="tab-desc">极致的画质增强补丁管理工具。支持 ReShade 预设一键注入，为你的二次元世界带来电影级的视觉盛宴。</p>
+                            <div style="background:rgba(255,255,255,0.02);padding:12px 24px;border-radius:8px;display:inline-block;color:var(--text-secondary);font-size:0.9rem;">
+                                开发进度：5% [█░░░░░░░░░░░░░]
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <div id="tab-tool-preferences" class="tools-tab-pane">
+                        <div class="settings-section">
+                            <h2 style="margin-top:0;">偏好设置</h2>
+                            <p class="tab-desc">在这里管理全局启动器配置与应用状态。</p>
+
+                            <div style="margin-top:32px;">
+                                <h3 style="margin-top:0;">应用排序</h3>
+                                <p class="tab-desc" style="font-size:0.85rem;">使用右侧的按钮自由调整顶栏图标位置，或直接将其移出启动器栈。</p>
+                                <div class="sortable-app-list" id="sortable-app-list"></div>
+                            </div>
+
+                            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.05);margin:32px 0;">
+
+                            <div>
+                                <h3 style="margin-top:0;">时长统计进程绑定</h3>
+                                <p class="tab-desc" style="font-size:0.85rem;">选择要管理的应用，并填写其对应的进程名称（无需加 .exe）。启动后系统会无感知地自动统计使用时长。</p>
+                                <div class="form-group" style="margin-bottom:16px;">
+                                    <label>选择目标应用</label>
+                                    <div class="custom-dropdown" id="time-tracking-dropdown" data-value="">
+                                        <div class="dropdown-header" id="time-tracking-header">
+                                            <span id="time-tracking-selected-text">-- 请选择应用 --</span>
+                                            <span class="material-symbols-outlined">expand_more</span>
+                                        </div>
+                                        <div class="dropdown-options" id="time-tracking-options" style="display:none;"></div>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>程序底层进程名称</label>
+                                    <input type="text" id="time-tracking-process-input" class="modern-input" placeholder="例如: LeagueClient, GenshinImpact 等...">
+                                </div>
+                                <div style="display:flex;align-items:center;margin-top:24px;">
+                                    <button id="save-process-name-btn" class="primary-btn-small" style="max-width:120px;">应用绑定</button>
+                                    <span id="process-save-feedback" style="color:#34d399;font-size:0.85rem;margin-left:12px;opacity:0;transition:opacity 0.3s;">已保存 ✓</span>
+                                </div>
+                            </div>
+
+                            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.05);margin:32px 0;">
+
+                            <div style="margin-bottom:40px;">
+                                <h3 style="margin-top:0;">游戏路径配置</h3>
+                                <p class="tab-desc" style="font-size:0.85rem;">如果自动提取抽卡记录失败，请手动指定游戏安装目录（含有游戏 .exe 的文件夹）。</p>
+                                <div class="game-path-config">
+                                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                                        <label style="width:80px;font-size:0.9rem;color:var(--text-secondary);">原神</label>
+                                        <div style="flex:1;display:flex;gap:8px;">
+                                            <input type="text" id="path-genshin" class="modern-input" style="flex:1;" placeholder="自动探测中...">
+                                            <button class="icon-btn-small" data-action="browse-path" data-target="path-genshin"><span class="material-symbols-outlined">folder_open</span></button>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                                        <label style="width:80px;font-size:0.9rem;color:var(--text-secondary);">星穹铁道</label>
+                                        <div style="flex:1;display:flex;gap:8px;">
+                                            <input type="text" id="path-starrail" class="modern-input" style="flex:1;" placeholder="自动探测中...">
+                                            <button class="icon-btn-small" data-action="browse-path" data-target="path-starrail"><span class="material-symbols-outlined">folder_open</span></button>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:12px;">
+                                        <label style="width:80px;font-size:0.9rem;color:var(--text-secondary);">绝区零</label>
+                                        <div style="flex:1;display:flex;gap:8px;">
+                                            <input type="text" id="path-zzz" class="modern-input" style="flex:1;" placeholder="自动探测中...">
+                                            <button class="icon-btn-small" data-action="browse-path" data-target="path-zzz"><span class="material-symbols-outlined">folder_open</span></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="settings-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>个性化设置</h2>
+                <button id="close-modal-btn" class="close-btn"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="form-group">
+                <label>应用名称</label>
+                <input type="text" id="setting-app-name" class="modern-input" placeholder="输入你想自定的名称...">
+            </div>
+            <div class="form-group">
+                <label>简介与描述</label>
+                <textarea id="setting-app-desc" class="modern-textarea" placeholder="填写一下应用的简介说明..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>静态背景图</label>
+                <div class="file-input-group">
+                    <span id="label-bg-img-path" class="file-path-display" title="未设置">未设置</span>
+                    <button class="file-btn" id="btn-pick-bg-img" style="flex-shrink:0;">选择</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>视频动态背景</label>
+                <div class="file-input-group">
+                    <span id="label-bg-vid-path" class="file-path-display" title="未设置">未设置</span>
+                    <button class="file-btn" id="btn-pick-bg-vid" style="flex-shrink:0;">选择</button>
+                </div>
+            </div>
+            <div class="form-group row-group">
+                <label>优先使用视频背景</label>
+                <label class="switch">
+                    <input type="checkbox" id="setting-use-video">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:24px;">提示：多媒体底层由 C# 专属通道直读，不会向硬盘写入任何复制垃圾文件，且设置均自动保存。</p>
+            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.05);margin:4px 0 16px;">
+            <div class="form-group">
+                <label style="color:rgba(248,113,113,0.8);">危险操作</label>
+                <button id="remove-app-btn" class="ghost-btn" style="border-color:rgba(248,113,113,0.3);color:rgba(248,113,113,0.8);width:100%;margin-top:4px;">
+                    <span class="material-symbols-outlined" style="font-size:16px;vertical-align:-3px;margin-right:6px;">remove_circle</span>
+                    从启动器移除
+                </button>
+            </div>
+            <div class="modal-footer">
+                <button id="save-settings-btn" class="primary-btn-small">保存设置</button>
+                <button id="clear-bg-btn" class="ghost-btn">清除背景数据</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加米游游戏下拉面板 -->
+    <div id="add-hoyo-backdrop" style="display:none; position:fixed; inset:0; z-index:8000;"></div>
+    <div id="add-hoyo-modal" style="display:none; position:fixed; top:60px; left:0; z-index:8001; padding:12px 20px;">
+        <div class="hoyo-dropdown-panel">
+            <div class="hoyo-dropdown-cards">
+                <!-- 原神 -->
+                <div class="hoyo-drop-card" data-game-id="Hoyo_Genshin">
+                    <div class="hoyo-drop-card-bg" style="background-image:url('http://launcher.local/icon/gi.png')"></div>
+                    <div class="hoyo-drop-card-overlay"></div>
+                    <div class="hoyo-drop-card-body">
+                        <div class="hoyo-drop-card-name">原神</div>
+                        <div class="hoyo-drop-card-desc">在七种元素交汇的大陆探索与冒险</div>
+                        <button class="game-card-add-btn">添加</button>
+                    </div>
+                </div>
+                <!-- 崩坏：星穹铁道 -->
+                <div class="hoyo-drop-card" data-game-id="Hoyo_StarRail">
+                    <div class="hoyo-drop-card-bg" style="background-image:url('http://launcher.local/icon/hsr.png')"></div>
+                    <div class="hoyo-drop-card-overlay"></div>
+                    <div class="hoyo-drop-card-body">
+                        <div class="hoyo-drop-card-name">崩坏：星穹铁道</div>
+                        <div class="hoyo-drop-card-desc">乘上列车，终抵群星</div>
+                        <button class="game-card-add-btn">添加</button>
+                    </div>
+                </div>
+                <!-- 绝区零 -->
+                <div class="hoyo-drop-card" data-game-id="Hoyo_ZZZ">
+                    <div class="hoyo-drop-card-bg" style="background-image:url('http://launcher.local/icon/zzz.png')"></div>
+                    <div class="hoyo-drop-card-overlay"></div>
+                    <div class="hoyo-drop-card-body">
+                        <div class="hoyo-drop-card-name">绝区零</div>
+                        <div class="hoyo-drop-card-desc">新艾利都，欢迎你的到来</div>
+                        <button class="game-card-add-btn">添加</button>
+                    </div>
+                </div>
+                <!-- 崩坏3 -->
+                <div class="hoyo-drop-card" data-game-id="Hoyo_H3">
+                    <div class="hoyo-drop-card-bg" style="background-image:url('http://launcher.local/icon/h3.png')"></div>
+                    <div class="hoyo-drop-card-overlay"></div>
+                    <div class="hoyo-drop-card-body">
+                        <div class="hoyo-drop-card-name">崩坏3</div>
+                        <div class="hoyo-drop-card-desc">终将到来的律者，终将落幕的终焉</div>
+                        <button class="game-card-add-btn">添加</button>
+                    </div>
+                </div>
+                <!-- 崩坏：因缘精灵 -->
+                <div class="hoyo-drop-card" data-game-id="Hoyo_HYY">
+                    <div class="hoyo-drop-card-bg" style="background-image:url('http://launcher.local/icon/hyy.png')"></div>
+                    <div class="hoyo-drop-card-overlay"></div>
+                    <div class="hoyo-drop-card-body">
+                        <div class="hoyo-drop-card-name">崩坏：因缘精灵</div>
+                        <div class="hoyo-drop-card-desc">新的旅程，等待开启</div>
+                        <button class="game-card-add-btn">添加</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

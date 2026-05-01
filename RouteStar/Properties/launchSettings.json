@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "RouteStar (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "RouteStar (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
