@@ -243,16 +243,18 @@ document.addEventListener('DOMContentLoaded', () => {
         hoyoContainer.style.display = hoyoOrder.length === 0 ? 'none' : '';
     }
 
-    function renderAppPage(path) {
+    function renderAppPage(path, skipTransition = false) {
         if (!appRegistry[path]) return;
         const config = appRegistry[path];
 
-        // 触发黑幕过渡动画
-        const curtain = document.getElementById('transition-curtain');
-        if (curtain) {
-            curtain.classList.remove('curtain-fade');
-            void curtain.offsetWidth; // 触发重绘
-            curtain.classList.add('curtain-fade');
+        // 触发黑幕过渡动画 (仅当不跳过时)
+        if (!skipTransition) {
+            const curtain = document.getElementById('transition-curtain');
+            if (curtain) {
+                curtain.classList.remove('curtain-fade');
+                void curtain.offsetWidth; // 触发重绘
+                curtain.classList.add('curtain-fade');
+            }
         }
 
         homeEmpty.style.display = 'none';
@@ -583,6 +585,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (hoyoLb) { hoyoLb.textContent = parsedPath; hoyoLb.title = parsedPath; }
                 }
                 saveConfig();
+                // 实时刷新当前页面的背景
+                if (currentAppPath === targetPath) {
+                    renderAppPage(targetPath, true);
+                }
 
                 // 按钮反馈（仅标准 modal 场景有效）
                 const btn = data.mediaType === 'video' ? btnPickBgVid : btnPickBgImg;
@@ -800,6 +806,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('check-use-video-pro').addEventListener('change', (e) => {
             cfg.useVideo = e.target.checked;
             saveConfig();
+            renderAppPage(id, true);
         });
 
         // 打开目录 (利用程序完整路径，C# 端需要处理文件路径转目录路径)
@@ -1005,6 +1012,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (appRegistry[id]) {
                 appRegistry[id].useVideo = e.target.checked;
                 saveConfig();
+                renderAppPage(id, true);
             }
         });
 
