@@ -66,10 +66,35 @@
                     <p class="tips-text" id="tip-text">Tips：你以为是崩坏，其实是自动保存没跟上。</p>
                 </div>
                 <div class="home-bottom-right">
-                    <button id="launch-app-btn" class="launch-btn-yellow">启动</button>
-                    <button id="app-settings-btn" class="settings-hamburger-btn">
-                        <span class="material-symbols-outlined">menu</span>
-                    </button>
+                    <!-- 主操作按钮区（面板悬浮在这个容器上方） -->
+                    <div class="action-buttons-row" id="action-buttons-row">
+                        <!-- 浮动下载详情面板：鼠标移到按钮行时才显示 -->
+                        <div id="download-panel" class="download-panel-pro">
+                            <div class="dl-pro-header">
+                                <span class="material-symbols-outlined" id="dl-phase-icon" style="color:#FFD600;font-size:1.1rem;">downloading</span>
+                                <span id="dl-phase-text" style="font-weight:600;font-size:0.9rem;">下载中</span>
+                                <span id="dl-pro-percent" style="margin-left:auto;font-weight:700;color:#FFD600;">0%</span>
+                            </div>
+                            <div class="dl-pro-track">
+                                <div class="dl-pro-fill" id="dl-pro-fill"></div>
+                            </div>
+                            <div class="dl-pro-stats-row">
+                                <span id="dl-progress-text">0 MB / 0 GB</span>
+                                <span id="dl-speed-text">-- MB/s</span>
+                                <span style="color:rgba(255,255,255,0.4);">剩余 <span id="dl-eta-text">--:--:--</span></span>
+                            </div>
+                        </div>
+
+                        <button id="launch-app-btn" class="launch-btn-yellow">
+                            <span class="material-symbols-outlined launch-btn-icon-el" id="launch-btn-icon" style="display:none;"></span>
+                            <span id="launch-btn-text">启动</span>
+                            <span id="launch-btn-subtext"></span>
+                        </button>
+                        <button id="pre-download-btn" class="pre-download-btn" style="display:none;">预下载</button>
+                        <button id="app-settings-btn" class="settings-hamburger-btn">
+                            <span class="material-symbols-outlined">menu</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -259,6 +284,39 @@
                 <button id="save-settings-btn" class="primary-btn-small">保存设置</button>
                 <button id="clear-bg-btn" class="ghost-btn">清除背景数据</button>
             </div>
+        </div>
+    </div>
+
+    <!-- 安装游戏弹窗 -->
+    <div id="install-dialog" class="modal-overlay" style="display:none; z-index:9000;">
+        <div class="modal-card" style="width: 480px; padding: 24px;">
+            <div class="modal-header" style="margin-bottom: 24px;">
+                <h2 style="font-size: 1.2rem;">安装游戏</h2>
+                <button id="close-install-dialog-btn" class="close-btn"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+                <img id="install-game-icon" src="" style="width: 48px; height: 48px; border-radius: 12px; object-fit: cover;" />
+                <span id="install-game-name" style="font-size: 1.1rem; font-weight: 600;"></span>
+            </div>
+            <div class="form-group">
+                <label>安装路径</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="install-path-input" class="modern-input" style="flex:1; cursor: pointer;" readonly>
+                    <button class="icon-btn-small" id="btn-pick-install-dir" style="flex-shrink:0;"><span class="material-symbols-outlined">folder_open</span></button>
+                </div>
+            </div>
+            <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+                <h4 style="margin: 0 0 12px 0; font-size: 0.9rem; color: rgba(255,255,255,0.8);">存储空间要求</h4>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: rgba(255,255,255,0.6); margin-bottom: 8px;">
+                    <span>解压所需空间</span>
+                    <span id="install-decompressed-size">-- GB</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+                    <span>安装所需空间</span>
+                    <span id="install-download-size">-- GB</span>
+                </div>
+            </div>
+            <button id="confirm-install-btn" class="launch-btn-yellow" style="width: 100%;">确认</button>
         </div>
     </div>
 

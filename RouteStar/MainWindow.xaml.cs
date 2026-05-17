@@ -9,11 +9,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
 using Microsoft.Web.WebView2.Core;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -25,6 +28,20 @@ namespace RouteStar
     /// </summary>
     public sealed partial class MainWindow : Window
     {
+        // ── 虚拟内存策略 P/Invoke ─────────────────────────────────────────
+        // 传入 (-1, -1) 告知 OS 允许将所有可换出的物理页立即挪到 Page File
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessWorkingSetSize(
+            IntPtr hProcess,
+            IntPtr dwMinimumWorkingSetSize,
+            IntPtr dwMaximumWorkingSetSize);
+
+        private bool _webViewSuspended = false;
+        private CancellationTokenSource? _downloadCts = null;
+        private bool _isDownloadPaused = false;
+        private string? _currentInstallDir = null;  // 当前正在下载/已暂停的安装目录
+        private string? _currentAppKey = null;       // 当前正在下载的 appKey
+
         public MainWindow()
         {
             InitializeComponent();
@@ -89,11 +106,81 @@ namespace RouteStar
                 };
 
                 LauncherWebView.Source = new Uri("http://launcher.local/index.html");
+
+                // 订阅窗口激活状态：失活时挂起 WebView2 并 Trim 宿主内存
+                this.Activated += MainWindow_Activated;
             }
             else
             {
                 System.Diagnostics.Debug.WriteLine($"[Error] Web resources path not found: {webPath}");
             }
+        }
+
+        // ── 窗口激活/失活处理 ─────────────────────────────────────────────
+        private async void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
+        {
+            if (LauncherWebView.CoreWebView2 is null) return;
+
+            bool deactivated = args.WindowActivationState == WindowActivationState.Deactivated;
+
+            if (deactivated && !_webViewSuspended)
+            {
+                try
+                {
+                    // 步骤 1：通知 JS 停止所有定时器，让 WebView2 进入空闲状态
+                    LauncherWebView.CoreWebView2.PostWebMessageAsJson("{\"type\":\"prepare_suspend\"}");
+
+                    // 步骤 2：等待 800ms，确保 JS 已停止所有活动
+                    await Task.Delay(800);
+
+                    // 步骤 3：此时 WebView2 应已空闲，可以安全挂起
+                    bool suspended = await LauncherWebView.CoreWebView2.TrySuspendAsync();
+                    if (suspended)
+                    {
+                        _webViewSuspended = true;
+                        TrimHostProcessMemory();
+                        System.Diagnostics.Debug.WriteLine("[MemOpt] WebView2 suspended successfully.");
+                    }
+                    else
+                    {
+                        // 挂起失败（概率极低），仍执行 Trim 获得部分收益
+                        TrimHostProcessMemory();
+                        System.Diagnostics.Debug.WriteLine("[MemOpt] TrySuspendAsync returned false, host trimmed only.");
+                    }
+                }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    // 极端情况下的状态异常，跳过本次挂起
+                    System.Diagnostics.Debug.WriteLine($"[MemOpt] Suspend skipped: 0x{ex.HResult:X8}");
+                }
+            }
+            else if (!deactivated && _webViewSuspended)
+            {
+                // 恢复 WebView2 渲染
+                LauncherWebView.CoreWebView2.Resume();
+                _webViewSuspended = false;
+
+                // 等待 200ms 确保 WebView2 进程完全唤醒后再发消息
+                // 否则消息可能在进程还未就绪时被丢弃
+                await Task.Delay(200);
+                LauncherWebView.CoreWebView2.PostWebMessageAsJson("{\"type\":\"resume_timers\"}");
+                System.Diagnostics.Debug.WriteLine("[MemOpt] WebView2 resumed.");
+            }
+        }
+
+        // ── 主动将 .NET 宿主进程的物理页换入虚拟内存 ─────────────────────
+        private static void TrimHostProcessMemory()
+        {
+            // 步骤 1：强制 .NET GC 收集，释放托管堆已死对象，最大化换出效果
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+
+            // 步骤 2：通知 OS 将所有可换出物理页立即移入 Page File
+            var process = System.Diagnostics.Process.GetCurrentProcess();
+            SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
+
+            System.Diagnostics.Debug.WriteLine("[MemOpt] Host process working set trimmed.");
         }
 
         private async void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -163,6 +250,24 @@ namespace RouteStar
                             LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(response));
                         }
                     }
+                    else if (actionType == "pick_install_dir")
+                    {
+                        var picker = new Windows.Storage.Pickers.FolderPicker();
+                        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+                        picker.FileTypeFilter.Add("*");
+                        var folder = await picker.PickSingleFolderAsync();
+                        if (folder != null)
+                        {
+                            var response = new
+                            {
+                                type = "install_dir_picked",
+                                path = folder.Path
+                            };
+                            LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(response));
+                        }
+                    }
                     else if (actionType == "launch_app")
                     {
                         if (root.TryGetProperty("path", out var pathEl))
@@ -184,29 +289,60 @@ namespace RouteStar
                                     string procName = procEl.GetString();
                                     if (!string.IsNullOrEmpty(procName))
                                     {
-                                        // Start a disconnected background task to monitor the process
-                                        _ = System.Threading.Tasks.Task.Run(async () =>
+                                        string capturedAppKey = appKey;
+                                        _ = Task.Run(async () =>
                                         {
-                                            // Wait a bit initially for the slow-loading process to appear in the system (up to 60 seconds)
+                                            // 等待游戏进程出现（最多 60 秒）
                                             int initRetries = 60;
                                             while (System.Diagnostics.Process.GetProcessesByName(procName).Length == 0 && initRetries > 0)
                                             {
-                                                await System.Threading.Tasks.Task.Delay(1000);
+                                                await Task.Delay(1000);
                                                 initRetries--;
                                             }
 
-                                            // If found, enter the 1-second tick loop
+                                            if (System.Diagnostics.Process.GetProcessesByName(procName).Length == 0) return;
+
+                                            // 记录会话开始时间
+                                            var sessionStart = DateTime.UtcNow;
+
+                                            // 每 5 秒轮询一次检测进程退出（原来是每秒发一次 IPC，CPU 降低 80%）
                                             while (System.Diagnostics.Process.GetProcessesByName(procName).Length > 0)
                                             {
-                                                await System.Threading.Tasks.Task.Delay(1000);
-
-                                                // We must dispatch back to UI thread to communicate with WebView2 safely
-                                                DispatcherQueue.TryEnqueue(() =>
-                                                {
-                                                    var payloadObj = new { type = "update_time_tick", path = targetPath, appKey = appKey };
-                                                    LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(payloadObj));
-                                                });
+                                                await Task.Delay(5000);
                                             }
+
+                                            int elapsedSeconds = (int)(DateTime.UtcNow - sessionStart).TotalSeconds;
+                                            System.Diagnostics.Debug.WriteLine($"[TimeTrack] Session ended: {capturedAppKey}, +{elapsedSeconds}s");
+
+                                            // 直接写入磁盘，无论 WebView2 是否挂起都能正确保存
+                                            try
+                                            {
+                                                string cfgPath = Path.Combine(AppContext.BaseDirectory, "RouteStarConfig.json");
+                                                if (File.Exists(cfgPath))
+                                                {
+                                                    var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+                                                    if (node?["apps"] is JsonObject apps && apps[capturedAppKey] is JsonObject appNode)
+                                                    {
+                                                        int current = appNode["usageSeconds"]?.GetValue<int>() ?? 0;
+                                                        appNode["usageSeconds"] = current + elapsedSeconds;
+                                                        File.WriteAllText(cfgPath, node.ToJsonString());
+                                                    }
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                System.Diagnostics.Debug.WriteLine($"[TimeTrack] Config write failed: {ex.Message}");
+                                            }
+
+                                            // 若 WebView2 处于活跃状态，通知前端同步 UI 显示
+                                            DispatcherQueue.TryEnqueue(() =>
+                                            {
+                                                if (!_webViewSuspended && LauncherWebView.CoreWebView2 != null)
+                                                {
+                                                    var payload = new { type = "sync_usage_time", appKey = capturedAppKey, addSeconds = elapsedSeconds };
+                                                    LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
+                                                }
+                                            });
                                         });
                                     }
                                 }
@@ -351,15 +487,259 @@ namespace RouteStar
                                 LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(response));
                             }
                         }
-                        else if (actionType == "open_folder")
+                    }
+                    else if (actionType == "open_folder")
+                    {
+                        if (root.TryGetProperty("path", out var pEl))
                         {
-                            if (root.TryGetProperty("path", out var pEl))
+                            string folderPath = pEl.GetString();
+                            if (!string.IsNullOrEmpty(folderPath) && System.IO.Directory.Exists(folderPath))
                             {
-                                string folderPath = pEl.GetString();
-                                if (!string.IsNullOrEmpty(folderPath) && System.IO.Directory.Exists(folderPath))
+                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                                 {
-                                    System.Diagnostics.Process.Start("explorer.exe", folderPath);
+                                    FileName = folderPath,
+                                    UseShellExecute = true,
+                                    Verb = "open"
+                                });
+                            }
+                        }
+                    }
+                    else if (actionType == "get_game_status")
+                    {
+                        // JS 请求检测指定游戏的安装状态
+                        string appKey = root.TryGetProperty("appKey", out var akEl) ? akEl.GetString() ?? "" : "";
+                        string installDir = root.TryGetProperty("installDir", out var idEl) ? idEl.GetString() ?? "" : "";
+
+                        _ = Task.Run(async () =>
+                        {
+                            var status = await GameDownloadService.GetGameStatusAsync(appKey, installDir);
+                            DispatcherQueue.TryEnqueue(() =>
+                            {
+                                var resp = new
+                                {
+                                    type = "game_status_result",
+                                    appKey,
+                                    state = status.State.ToString().ToLowerInvariant().Replace("notinstalled", "not_installed").Replace("needsupdate", "needs_update").Replace("predownload", "pre_download"),
+                                    localVersion = status.LocalVersion,
+                                    latestVersion = status.LatestVersion,
+                                    preDownloadVersion = status.PreDownloadVersion,
+                                    downloadSizeGB = Math.Round(status.DownloadSizeBytes / 1_073_741_824.0, 2),
+                                    decompressedSizeGB = Math.Round(status.DecompressedSizeBytes / 1_073_741_824.0, 2),
+                                    useIncrementalPatch = status.UseIncrementalPatch
+                                };
+                                LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(resp));
+                            });
+                        });
+                    }
+                    else if (actionType == "start_install" || actionType == "start_update")
+                    {
+                        string appKey = root.TryGetProperty("appKey", out var akEl2) ? akEl2.GetString() ?? "" : "";
+                        bool isUpdate = actionType == "start_update";
+                        string? existingDir = root.TryGetProperty("installDir", out var exDirEl) ? exDirEl.GetString() : null;
+
+                        string? installDir = existingDir;
+
+                        // 如果是暂停后恢复，优先用保存的目录
+                        if (_isDownloadPaused && _currentAppKey == appKey && !string.IsNullOrEmpty(_currentInstallDir))
+                        {
+                            installDir = _currentInstallDir;
+                            _isDownloadPaused = false;
+                        }
+                        // 如果是全新安装，弹出目录选择
+                        else if (!isUpdate && string.IsNullOrEmpty(installDir))
+                        {
+                            var folderPicker = new Windows.Storage.Pickers.FolderPicker();
+                            var hwnd2 = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                            WinRT.Interop.InitializeWithWindow.Initialize(folderPicker, hwnd2);
+                            folderPicker.FileTypeFilter.Add("*");
+                            var folder = await folderPicker.PickSingleFolderAsync();
+                            if (folder == null) return; // 用户取消
+                            installDir = folder.Path;
+                        }
+
+                        if (string.IsNullOrEmpty(installDir)) return;
+                        string finalInstallDir = installDir;
+                        _currentInstallDir = finalInstallDir;
+                        _currentAppKey = appKey;
+                        _isDownloadPaused = false;
+
+                        // 先通知 JS 安装目录（用于保存配置）
+                        var dirResp = new { type = "install_dir_confirmed", appKey, installDir = finalInstallDir };
+                        LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(dirResp));
+
+                        // 启动下载 Task
+                        _isDownloadPaused = false;
+                        _downloadCts?.Cancel();
+                        _downloadCts = new CancellationTokenSource();
+                        var ct = _downloadCts.Token;
+
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var pkg = await GameDownloadService.FetchGamePackageAsync(appKey, ct);
+                                if (pkg?.main?.major == null) throw new Exception("无法获取安装包信息");
+
+                                string targetVersion = pkg.main.major.version ?? "";
+
+                                // 判断使用增量包还是完整包
+                                string? localVer = GameDownloadService.ReadLocalVersion(finalInstallDir);
+                                var patch = (isUpdate && localVer != null)
+                                    ? pkg.main.patches?.FirstOrDefault(p => p.version == localVer)
+                                    : null;
+
+                                var filesToDownload = (patch != null ? patch.game_pkgs : pkg.main.major.game_pkgs) ?? new();
+                                long totalBytes = filesToDownload.Sum(f => f.size);
+
+                                string tempDir = Path.Combine(finalInstallDir, "_routestar_tmp");
+                                Directory.CreateDirectory(tempDir);
+
+                                long totalDownloaded = 0;
+                                for (int i = 0; i < filesToDownload.Count; i++)
+                                {
+                                    ct.ThrowIfCancellationRequested();
+                                    var f = filesToDownload[i];
+
+                                    // 防护：API 返回的 URL 可能为空或非法
+                                    if (string.IsNullOrEmpty(f.url))
+                                        throw new InvalidDataException($"安装包信息异常：第 {i + 1} 个文件的下载地址为空");
+                                    string fileName;
+                                    try { fileName = Path.GetFileName(new Uri(f.url).LocalPath); }
+                                    catch (UriFormatException) { throw new InvalidDataException($"安装包信息异常：第 {i + 1} 个文件的下载地址格式无效 — {f.url}"); }
+
+                                    string destFile = Path.Combine(tempDir, fileName);
+
+                                    // 下载并报告进度
+                                    await GameDownloadService.DownloadFileAsync(f.url!, destFile, (dl, total, speed) =>
+                                    {
+                                        DispatcherQueue.TryEnqueue(() =>
+                                        {
+                                            var prog = new
+                                            {
+                                                type = "download_progress",
+                                                appKey,
+                                                phase = "downloading",
+                                                bytesDownloaded = totalDownloaded + dl,
+                                                totalBytes,
+                                                speedBytesPerSec = (long)speed,
+                                                currentFile = $"{i + 1}/{filesToDownload.Count}: {fileName}"
+                                            };
+                                            LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(prog));
+                                        });
+                                    }, ct);
+
+                                    totalDownloaded += f.size;
+
+                                    // MD5 校验
+                                    DispatcherQueue.TryEnqueue(() =>
+                                    {
+                                        var vProg = new { type = "download_progress", appKey, phase = "verifying", currentFile = fileName, bytesDownloaded = totalDownloaded, totalBytes, speedBytesPerSec = 0L };
+                                        LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(vProg));
+                                    });
+
+                                    if (!string.IsNullOrEmpty(f.md5))
+                                    {
+                                        bool ok = await GameDownloadService.VerifyMd5Async(destFile, f.md5, ct);
+                                        if (!ok) throw new Exception($"MD5 校验失败：{fileName}，请重试。");
+                                    }
+
                                 }
+
+                                // Step 2: Extract all files
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    var extProg = new { type = "download_progress", appKey, phase = "extracting", currentFile = "准备解压...", bytesDownloaded = totalBytes, totalBytes, speedBytesPerSec = 0L };
+                                    LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(extProg));
+                                });
+
+                                // 收集所有已下载文件路径（解压前准备）
+                                var allDownloadedFiles = filesToDownload
+                                    .Select(f => Path.Combine(tempDir, Path.GetFileName(new Uri(f.url!).LocalPath)))
+                                    .ToList();
+
+                                var fileGroups = allDownloadedFiles
+                                    .GroupBy(f => 
+                                    {
+                                        if (System.Text.RegularExpressions.Regex.IsMatch(f, @"\.\d{3}$"))
+                                            return f.Substring(0, f.LastIndexOf('.'));
+                                        return f;
+                                    })
+                                    .ToList();
+
+                                long totalExtractedBytes = 0;
+                                foreach (var group in fileGroups)
+                                {
+                                    ct.ThrowIfCancellationRequested();
+                                    
+                                    // Ensure parts are ordered (.001, .002, etc.)
+                                    var parts = group.OrderBy(f => f).ToList();
+                                    string baseName = Path.GetFileName(group.Key);
+
+                                    await GameDownloadService.ExtractZipAsync(parts, finalInstallDir, (entry) =>
+                                    {
+                                        totalExtractedBytes++;
+                                        if (totalExtractedBytes % 50 == 0)
+                                        {
+                                            DispatcherQueue.TryEnqueue(() =>
+                                            {
+                                                var eProg = new { type = "download_progress", appKey, phase = "extracting", currentFile = entry, bytesDownloaded = totalBytes, totalBytes, speedBytesPerSec = 0L };
+                                                LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(eProg));
+                                            });
+                                        }
+                                    }, ct);
+                                }
+                                
+                                // Clean up temp files
+                                try { Directory.Delete(tempDir, true); } catch { }
+
+                                // 写入本地版本信息
+                                GameDownloadService.WriteLocalVersion(finalInstallDir, targetVersion);
+
+                                // 自动搜索 exe
+                                string? exePath = GameDownloadService.FindGameExe(appKey, finalInstallDir);
+
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    var done = new { type = "download_progress", appKey, phase = "done", bytesDownloaded = totalBytes, totalBytes, speedBytesPerSec = 0L, currentFile = "", installedVersion = targetVersion, exePath = exePath ?? "" };
+                                    LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(done));
+                                });
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                string finalPhase = _isDownloadPaused ? "paused" : "cancelled";
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    var cancelled = new { type = "download_progress", appKey, phase = finalPhase, bytesDownloaded = 0L, totalBytes = 0L, speedBytesPerSec = 0L, currentFile = "" };
+                                    LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(cancelled));
+                                });
+                            }
+                            catch (Exception ex)
+                            {
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    var err = new { type = "download_progress", appKey, phase = "error", errorMessage = ex.Message, bytesDownloaded = 0L, totalBytes = 0L, speedBytesPerSec = 0L, currentFile = "" };
+                                    LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(err));
+                                });
+                            }
+                        });
+                    }
+                    else if (actionType == "pause_download")
+                    {
+                        _isDownloadPaused = true;
+                        _downloadCts?.Cancel();
+                    }
+                    else if (actionType == "cancel_download")
+                    {
+                        _isDownloadPaused = false;
+                        _downloadCts?.Cancel();
+                        
+                        string installDir = root.TryGetProperty("installDir", out var idEl) ? idEl.GetString() ?? "" : "";
+                        if (!string.IsNullOrEmpty(installDir))
+                        {
+                            string tempDir = Path.Combine(installDir, "_routestar_tmp");
+                            if (Directory.Exists(tempDir))
+                            {
+                                try { Directory.Delete(tempDir, true); } catch { }
                             }
                         }
                     }

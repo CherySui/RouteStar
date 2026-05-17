@@ -184,13 +184,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${h} h ${m} min ${s} s`;
     }
 
+    // saveConfig 防抖：停止操作 300ms 后才真正写入，避免连续操作引发大量 IPC+磁盘写入
+    let _saveTimer = null;
     function saveConfig() {
-        if (window.chrome && window.chrome.webview) {
-            window.chrome.webview.postMessage({
-                type: 'save_config',
-                data: { apps: appRegistry, order: appOrder, hoyoOrder: hoyoOrder, gamePaths: gamePaths }
-            });
-        }
+        clearTimeout(_saveTimer);
+        _saveTimer = setTimeout(() => {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type: 'save_config',
+                    data: { apps: appRegistry, order: appOrder, hoyoOrder: hoyoOrder, gamePaths: gamePaths }
+                });
+            }
+        }, 300);
     }
 
     // 重绘顶栏的图标列表
@@ -268,12 +273,18 @@ document.addEventListener('DOMContentLoaded', () => {
             homeBgVideo.style.display = 'block';
             globalBgImage.style.backgroundImage = 'none';
         } else if (config.bgImg) {
+            // 彻底卸载视频解码器，释放约 40-80MB GPU/CPU 内存
+            homeBgVideo.pause();
+            homeBgVideo.removeAttribute('src');
+            homeBgVideo.load();
             homeBgVideo.style.display = 'none';
-            homeBgVideo.src = '';
             globalBgImage.style.backgroundImage = `url("${config.bgImg}")`;
         } else {
+            // 同上，无背景时也要彻底卸载
+            homeBgVideo.pause();
+            homeBgVideo.removeAttribute('src');
+            homeBgVideo.load();
             homeBgVideo.style.display = 'none';
-            homeBgVideo.src = '';
             globalBgImage.style.backgroundImage = 'none';
         }
 
@@ -282,15 +293,199 @@ document.addEventListener('DOMContentLoaded', () => {
             uTimeSpan.textContent = formatUsageTime(config.usageSeconds || 0);
         }
 
-        // 米游游戏：根据是否有游戏路径切换按钮文字
+        // 辅助函数：确保按钮内部 DOM 结构完整并设置文本
+        function setLaunchBtnSimpleText(text, disabled) {
+            let textEl = document.getElementById('launch-btn-text');
+            if (!textEl) {
+                launchAppBtn.innerHTML = `
+                    <div class="launch-btn-icon" id="launch-btn-icon-container" style="display:none;">
+                        <span class="material-symbols-outlined" id="launch-btn-icon">arrow_downward</span>
+                    </div>
+                    <div class="dl-progress-ring-container" id="dl-progress-ring-container" style="display:none;">
+                        <svg class="dl-progress-ring" viewBox="0 0 36 36">
+                            <circle class="ring-bg" cx="18" cy="18" r="14"></circle>
+                            <circle class="ring-fill" id="dl-ring-fill" cx="18" cy="18" r="14"></circle>
+                            <circle class="ring-dot" id="dl-ring-dot" cx="18" cy="4" r="2"></circle>
+                            <text class="ring-text" id="dl-ring-text" x="18" y="22" text-anchor="middle">0</text>
+                        </svg>
+                    </div>
+                    <div class="launch-btn-text-content" style="display:flex; flex-direction:column; align-items:flex-start; margin-left:8px;">
+                        <span id="launch-btn-text"></span>
+                        <span id="launch-btn-subtext" style="font-size:0.75rem; color:#FFD600; display:none; line-height:1;"></span>
+                    </div>
+                `;
+                textEl = document.getElementById('launch-btn-text');
+            }
+            textEl.textContent = text;
+            launchAppBtn.disabled = disabled;
+            launchAppBtn.className = 'launch-btn-yellow';
+            document.getElementById('launch-btn-icon-container').style.display = 'none';
+            document.getElementById('dl-progress-ring-container').style.display = 'none';
+            document.getElementById('launch-btn-subtext').style.display = 'none';
+        }
+
+        // 米游游戏：启动游戏状态检测
         if (config.isHoyo) {
-            const hasPath = getHoyoGamePath(path);
-            launchAppBtn.textContent = hasPath ? '开始游戏' : '安装游戏';
+            document.getElementById('launch-btn-text').textContent = '检测中...';
+            document.getElementById('launch-btn-icon').style.display = 'none';
+            document.getElementById('launch-btn-subtext').textContent = '';
+            launchAppBtn.className = 'launch-btn-yellow';
+            launchAppBtn.disabled = true;
+            const preDownloadBtn = document.getElementById('pre-download-btn');
+            if (preDownloadBtn) preDownloadBtn.style.display = 'none';
+            const installDir = getHoyoFolderPath(path);
+            if (window.chrome) window.chrome.webview.postMessage({ type: 'get_game_status', appKey: path, installDir });
         } else {
-            launchAppBtn.textContent = '启动';
+            document.getElementById('launch-btn-text').textContent = '启动';
+            document.getElementById('launch-btn-icon').style.display = 'none';
+            document.getElementById('launch-btn-subtext').textContent = '';
+            launchAppBtn.className = 'launch-btn-yellow';
+            launchAppBtn.disabled = false;
         }
 
         renderTodos(path);
+    }
+
+    // 全局 callback 存储（替代 onclick 避免二次触发）
+    let _hoyoActionCallback = null;
+
+    function applyHoyoGameState(appKey, state, data) {
+        if (currentAppPath !== appKey) return;
+        const launchBtn = document.getElementById('launch-app-btn');
+        const preBtn = document.getElementById('pre-download-btn');
+        const dlPanel = document.getElementById('download-panel');
+        if (!launchBtn) return;
+
+        const iconEl = document.getElementById('launch-btn-icon');
+        const textEl = document.getElementById('launch-btn-text');
+        const subtextEl = document.getElementById('launch-btn-subtext');
+
+        const setBtnState = (icon, text, subtext, isDownloading, callback) => {
+            launchBtn.className = isDownloading ? 'launch-btn-yellow downloading-state' : 'launch-btn-yellow';
+            launchBtn.disabled = false;
+            iconEl.textContent = icon || '';
+            iconEl.style.display = icon ? '' : 'none';
+            textEl.textContent = text;
+            subtextEl.textContent = subtext || '';
+            _hoyoActionCallback = callback || null;
+        };
+
+        if (dlPanel) dlPanel.classList.remove('active');
+        if (preBtn) preBtn.style.display = 'none';
+
+        switch (state) {
+            case 'not_installed':
+                setBtnState('download', '获取游戏', `${data?.downloadSizeGB || 0} GB`, false, () => installHoyoGame(appKey, data?.downloadSizeGB, data?.decompressedSizeGB));
+                break;
+            case 'installed':
+                setBtnState('play_arrow', '开始游戏', null, false, null);
+                break;
+            case 'needs_update':
+                setBtnState('update', '更新游戏', `${data?.downloadSizeGB || 0} GB`, false, () => updateHoyoGame(appKey));
+                break;
+            case 'pre_download':
+                setBtnState('play_arrow', '开始游戏', null, false, null);
+                if (preBtn) {
+                    preBtn.style.display = '';
+                    preBtn.textContent = `预下载 v${data.preDownloadVersion} (${data.downloadSizeGB} GB)`;
+                    preBtn.onclick = () => updateHoyoGame(appKey);
+                }
+                break;
+            case 'downloading':
+            case 'extracting':
+                setBtnState('pause_circle', '暂停下载', null, true, () => window.chrome?.webview?.postMessage({ type: 'pause_download' }));
+                if (dlPanel) dlPanel.classList.add('active');
+                break;
+            case 'paused':
+                setBtnState('play_arrow', '继续下载', null, true, () => {
+                    const dir = getHoyoFolderPath(appKey);
+                    // 直接带目录续传，不弹文件选择器
+                    window.chrome?.webview?.postMessage({ type: 'start_install', appKey, installDir: dir });
+                });
+                if (dlPanel) dlPanel.classList.add('active');
+                break;
+        }
+    }
+
+    let _pendingInstallAppKey = null;
+
+    function installHoyoGame(appKey, downloadSizeGB, decompressedSizeGB) {
+        if (!window.chrome) return;
+        _pendingInstallAppKey = appKey;
+        
+        const cfg = appRegistry[appKey];
+        if (cfg) {
+            let iconSrc = '';
+            if (cfg.localIcon) iconSrc = cfg.localIcon;
+            else if (cfg.base64Icon) iconSrc = 'data:image/png;base64,' + cfg.base64Icon;
+            else iconSrc = cfg.bgImg || '';
+            document.getElementById('install-game-icon').src = iconSrc;
+            document.getElementById('install-game-name').textContent = cfg.name;
+        }
+
+        const defaultPath = getHoyoFolderPath(appKey) || `D:\\Games\\${cfg ? cfg.name : 'HoyoGame'}`;
+        document.getElementById('install-path-input').value = defaultPath;
+
+        document.getElementById('install-decompressed-size').textContent = decompressedSizeGB ? `${decompressedSizeGB} GB` : '-- GB';
+        document.getElementById('install-download-size').textContent = downloadSizeGB ? `${downloadSizeGB} GB` : '-- GB';
+
+        document.getElementById('install-dialog').style.display = 'flex';
+    }
+
+    // 安装弹窗事件绑定
+    (function initInstallDialog() {
+        const installDialog = document.getElementById('install-dialog');
+        const closeBtn = document.getElementById('close-install-dialog-btn');
+        const pickDirBtn = document.getElementById('btn-pick-install-dir');
+        const confirmBtn = document.getElementById('confirm-install-btn');
+        const pathInput = document.getElementById('install-path-input');
+
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            installDialog.style.display = 'none';
+        });
+
+        // 点击输入框或者按钮都可以呼出文件夹选择
+        const openPicker = () => {
+            if (window.chrome) window.chrome.webview.postMessage({ type: 'pick_install_dir' });
+        };
+        if (pickDirBtn) pickDirBtn.addEventListener('click', openPicker);
+        if (pathInput) pathInput.addEventListener('click', openPicker);
+
+        if (confirmBtn) confirmBtn.addEventListener('click', () => {
+            const path = pathInput ? pathInput.value : '';
+            if (!path) return;
+            installDialog.style.display = 'none';
+            if (window.chrome && _pendingInstallAppKey) {
+                window.chrome.webview.postMessage({ type: 'start_install', appKey: _pendingInstallAppKey, installDir: path });
+            }
+        });
+    })();
+
+    function updateHoyoGame(appKey) {
+        if (!window.chrome) return;
+        const installDir = getHoyoFolderPath(appKey);
+        window.chrome.webview.postMessage({ type: 'start_update', appKey, installDir });
+    }
+
+    function formatBytes(bytes) {
+        if (bytes >= 1_073_741_824) return (bytes / 1_073_741_824).toFixed(2) + ' GB';
+        if (bytes >= 1_048_576) return (bytes / 1_048_576).toFixed(1) + ' MB';
+        return (bytes / 1024).toFixed(0) + ' KB';
+    }
+
+    function formatSpeed(bps) {
+        if (bps >= 1_048_576) return (bps / 1_048_576).toFixed(1) + ' MB/s';
+        if (bps >= 1024) return (bps / 1024).toFixed(0) + ' KB/s';
+        return bps + ' B/s';
+    }
+
+    function formatEta(remainBytes, bps) {
+        if (!bps || bps <= 0) return '--:--:--';
+        const secs = Math.floor(remainBytes / bps);
+        const h = Math.floor(secs / 3600).toString().padStart(2, '0');
+        const m = Math.floor((secs % 3600) / 60).toString().padStart(2, '0');
+        const s = (secs % 60).toString().padStart(2, '0');
+        return `${h}:${m}:${s}`;
     }
 
     // 各米游游戏的 exe 文件名与进程名对照表
@@ -536,6 +731,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     saveConfig();
                 }
             }
+            else if (data.type === 'install_dir_picked') {
+                const input = document.getElementById('install-path-input');
+                if (input) input.value = data.path;
+            }
             else if (data.type === 'app_selected') {
                 if (data.base64Icon) {
                     if (!appRegistry[data.path]) {
@@ -599,16 +798,111 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => { btn.textContent = originalText; btn.style.color = ''; }, 2000);
                 }
             }
-            else if (data.type === 'update_time_tick') {
-                const p = data.appKey || data.path;
-                if (p && appRegistry[p]) {
-                    appRegistry[p].usageSeconds = (appRegistry[p].usageSeconds || 0) + 1;
-                    saveConfig();
-                    if (currentAppPath === p) {
+            else if (data.type === 'sync_usage_time') {
+                // C# 游戏会话结束时，一次性同步累计时长到前端
+                // (C# 已直接写入磁盘，这里仅更新内存状态和 UI 显示)
+                const { appKey, addSeconds } = data;
+                if (appKey && appRegistry[appKey]) {
+                    appRegistry[appKey].usageSeconds = (appRegistry[appKey].usageSeconds || 0) + addSeconds;
+                    // 若当前正在展示该应用，立即刷新 UI
+                    if (currentAppPath === appKey) {
                         const uTimeSpan = document.getElementById('home-usage-time');
-                        if (uTimeSpan) uTimeSpan.textContent = formatUsageTime(appRegistry[p].usageSeconds);
+                        if (uTimeSpan) uTimeSpan.textContent = formatUsageTime(appRegistry[appKey].usageSeconds);
                     }
                 }
+            }
+            else if (data.type === 'prepare_suspend') {
+                // C# 通知：即将挂起 WebView2，停止所有定时器让其进入空闲状态
+                stopAllTimers();
+            }
+            else if (data.type === 'resume_timers') {
+                // C# 通知：WebView2 已恢复，重启定时器
+                resumeAllTimers();
+            }
+            else if (data.type === 'game_status_result') {
+                // C# 返回游戏状态检测结果
+                applyHoyoGameState(data.appKey, data.state, data);
+            }
+            else if (data.type === 'install_dir_confirmed') {
+                // C# 确认安装目录后，保存到配置并开始显示下载面板
+                const { appKey, installDir } = data;
+                if (appKey === 'Hoyo_Genshin') gamePaths.genshin = installDir;
+                else if (appKey === 'Hoyo_StarRail') gamePaths.starrail = installDir;
+                else if (appKey === 'Hoyo_ZZZ') gamePaths.zzz = installDir;
+                else if (appKey === 'Hoyo_H3') gamePaths.h3 = installDir;
+                saveConfig();
+                applyHoyoGameState(appKey, 'downloading', {});
+            }
+            else if (data.type === 'download_progress') {
+                const { appKey, phase, bytesDownloaded, totalBytes, speedBytesPerSec, currentFile } = data;
+                const dlPanel = document.getElementById('download-panel');
+                const launchBtn = document.getElementById('launch-app-btn');
+
+                if (phase === 'done') {
+                    // 安装完成：更新路径、刷新状态、隐藏进度条
+                    if (data.exePath && appKey === currentAppPath) {
+                        if (appKey === 'Hoyo_Genshin') gamePaths.genshin = data.exePath.substring(0, data.exePath.lastIndexOf('\\'));
+                        else if (appKey === 'Hoyo_StarRail') gamePaths.starrail = data.exePath.substring(0, data.exePath.lastIndexOf('\\'));
+                        else if (appKey === 'Hoyo_ZZZ') gamePaths.zzz = data.exePath.substring(0, data.exePath.lastIndexOf('\\'));
+                        else if (appKey === 'Hoyo_H3') gamePaths.h3 = data.exePath.substring(0, data.exePath.lastIndexOf('\\'));
+                        if (appRegistry[appKey]) appRegistry[appKey].path = data.exePath;
+                        saveConfig();
+                    }
+                    if (dlPanel) dlPanel.classList.remove('active');
+                    applyHoyoGameState(appKey, 'installed', null);
+                    return;
+                }
+
+                if (phase === 'cancelled' || phase === 'error') {
+                    if (dlPanel) dlPanel.classList.remove('active');
+                    applyHoyoGameState(appKey, 'not_installed', { downloadSizeGB: 0 }); // Fallback UI state
+                    if (phase === 'error' && data.errorMessage) {
+                        console.error('[Download Error]', data.errorMessage);
+                    }
+                    return;
+                }
+                
+                if (phase === 'paused') {
+                    applyHoyoGameState(appKey, 'paused', { downloadSizeGB: 0, useIncrementalPatch: false });
+                    return;
+                }
+
+                // 更新进度面板
+                if (dlPanel) dlPanel.classList.add('active');
+                applyHoyoGameState(appKey, phase === 'extracting' ? 'extracting' : 'downloading', {});
+
+                const pct = totalBytes > 0 ? (bytesDownloaded / totalBytes * 100) : 0;
+
+                // 进度条
+                const fillEl = document.getElementById('dl-pro-fill');
+                if (fillEl) fillEl.style.width = pct.toFixed(1) + '%';
+
+                // 百分比
+                const pctEl = document.getElementById('dl-pro-percent');
+                if (pctEl) pctEl.textContent = Math.floor(pct) + '%';
+
+                // ETA
+                const formattedEta = formatEta(totalBytes - bytesDownloaded, speedBytesPerSec);
+                const etaEl = document.getElementById('dl-eta-text');
+                if (etaEl) etaEl.textContent = phase === 'downloading' ? formattedEta : '--:--:--';
+
+                // 统计
+                const progEl = document.getElementById('dl-progress-text');
+                if (progEl) progEl.textContent = `${formatBytes(bytesDownloaded)} / ${formatBytes(totalBytes)}`;
+                const speedEl = document.getElementById('dl-speed-text');
+                if (speedEl) speedEl.textContent = phase === 'downloading' ? formatSpeed(speedBytesPerSec) : '--';
+
+                // 阶段图标/文字
+                const phaseLabels = {
+                    downloading: { icon: 'downloading', text: '下载中' },
+                    verifying:   { icon: 'verified',    text: '校验中' },
+                    extracting:  { icon: 'folder_zip',  text: '解压中' },
+                };
+                const phaseMeta = phaseLabels[phase] || { icon: 'downloading', text: '处理中' };
+                const phaseIconEl = document.getElementById('dl-phase-icon');
+                const phaseTextEl = document.getElementById('dl-phase-text');
+                if (phaseIconEl) phaseIconEl.textContent = phaseMeta.icon;
+                if (phaseTextEl) phaseTextEl.textContent = phaseMeta.text;
             }
         });
     }
@@ -619,19 +913,23 @@ document.addEventListener('DOMContentLoaded', () => {
             const cfg = appRegistry[currentAppPath];
 
             if (cfg.isHoyo) {
+                // 如果状态机注册了回调（安装/更新/暂停），直接执行
+                if (_hoyoActionCallback) { _hoyoActionCallback(); return; }
+                // 否则走正常启动
                 const gamePath = getHoyoGamePath(currentAppPath);
                 if (!gamePath) {
-                    // 未配置路径 → 按钮提示（无 alert，保持原生感）
-                    const orig = launchAppBtn.textContent;
-                    launchAppBtn.textContent = '请先设置游戏路径';
-                    setTimeout(() => launchAppBtn.textContent = orig, 2000);
+                    const textEl = document.getElementById('launch-btn-text');
+                    if (textEl) {
+                        const orig = textEl.textContent;
+                        textEl.textContent = '请先设置游戏路径';
+                        setTimeout(() => textEl.textContent = orig, 2000);
+                    }
                     return;
                 }
                 window.chrome.webview.postMessage({
                     type: 'launch_app',
                     path: gamePath,
                     appKey: currentAppPath,
-                    // 进程名优先从预设表取，保证时长统计准确
                     processName: getHoyoProcessName(currentAppPath)
                 });
             } else {
@@ -642,6 +940,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     processName: cfg.processName || ''
                 });
             }
+        });
+    }
+
+    // 取消下载按钮
+    const cancelDownloadBtn = document.getElementById('cancel-download-btn');
+    if (cancelDownloadBtn) {
+        cancelDownloadBtn.addEventListener('click', () => {
+            if (!window.chrome || !currentAppPath) return;
+            const installDir = getHoyoFolderPath(currentAppPath);
+            window.chrome.webview.postMessage({ type: 'cancel_download', installDir });
         });
     }
 
@@ -1272,6 +1580,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Tips Cycle Logic ---
     const tipText = document.getElementById('tip-text');
     let tipsArray = [];
+    let _tipsIntervalId = null; // 保存 interval handle，以便挂起时停止
 
     if (tipText) {
         fetch('tips/tips.json')
@@ -1286,6 +1595,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function startTipsCycle() {
+        if (_tipsIntervalId) clearInterval(_tipsIntervalId); // 防止重复启动
         const showNextTip = () => {
             const randomTip = tipsArray[Math.floor(Math.random() * tipsArray.length)];
             tipText.textContent = randomTip;
@@ -1298,8 +1608,29 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         showNextTip();
-        setInterval(showNextTip, 5000); // Trigger every 5s
+        _tipsIntervalId = setInterval(showNextTip, 5000); // 保存 handle
     }
+
+    function stopAllTimers() {
+        // 停止 Tips 轮播（主要活跃源）
+        if (_tipsIntervalId) { clearInterval(_tipsIntervalId); _tipsIntervalId = null; }
+        // 清除 saveConfig 防抖（避免 suspend 期间还有 IPC 消息发出）
+        if (window._saveTimer) { clearTimeout(window._saveTimer); }
+    }
+
+    function resumeAllTimers() {
+        // 重启 Tips 轮播
+        if (tipsArray.length > 0 && !_tipsIntervalId) startTipsCycle();
+    }
+
+    // 双重保障：用浏览器原生的 visibilitychange 事件做兜底
+    // WebView2 恢复后页面会从 hidden 变为 visible，此时必然触发，比 IPC 消息更可靠
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            // 页面重新可见时，确保 Tips 轮播已在运行
+            resumeAllTimers();
+        }
+    });
 
     // 侧边栏 Tab 切换支持
     const sidebarItems = document.querySelectorAll('.sidebar-item');
