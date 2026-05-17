@@ -1230,15 +1230,15 @@ input:checked+.slider:before {
 /* === 结果容器 === */
 .gacha-result-container {
     flex: 1;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     padding: 16px 24px 20px;
     display: grid;
-    /* 使用 auto-fit 让卡片自动平分剩余空间，minmax 调大一点让卡片更大气 */
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    /* 固定 3 列，不让 auto-fit 在特定宽度下折叠成 4 列或 2 列 */
+    grid-template-columns: repeat(3, 1fr);
     grid-auto-rows: 1fr;
     gap: 20px;
-    align-content: stretch;
-    justify-content: center;
+    align-content: start;
     min-height: 0;
 }
 
@@ -2001,7 +2001,7 @@ input:checked+.slider:before {
     position: absolute;
     bottom: 100%;
     right: 0;
-    margin-bottom: 14px;
+    margin-bottom: 4px;
     width: 320px;
     background: rgba(28, 28, 28, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2070,6 +2070,7 @@ input:checked+.slider:before {
 
 /* 按钮小第二行文字（如 xx GB）*/
 #launch-btn-subtext {
+    display: none;
     font-size: 0.72rem;
     font-weight: 500;
     color: rgba(0, 0, 0, 0.55);
@@ -2099,7 +2100,7 @@ input:checked+.slider:before {
 /* 浮动下载面板 */
 .download-panel-pro {
     position: absolute;
-    bottom: calc(100% + 14px);
+    bottom: calc(100% + 4px);
     right: 0;
     width: 310px;
     background: rgba(22, 22, 22, 0.96);
@@ -2141,6 +2142,14 @@ input:checked+.slider:before {
     font-size: 0.9rem;
 }
 
+/* Material Symbols 图标基线比普通文字偏高，微调下移对齐 */
+#dl-phase-icon {
+    transform: translateY(1px);
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
+
 .dl-pro-track {
     height: 4px;
     background: rgba(255, 255, 255, 0.1);
@@ -2159,11 +2168,16 @@ input:checked+.slider:before {
 
 .dl-pro-stats-row {
     display: flex;
-    justify-content: space-between;
     font-size: 0.78rem;
     color: rgba(255, 255, 255, 0.6);
     margin-bottom: 12px;
+    align-items: center;
 }
+
+/* 三列等宽，各自对齐 */
+.dl-pro-stats-row > span:nth-child(1) { flex: 1; text-align: left; }
+.dl-pro-stats-row > span:nth-child(2) { flex: 1; text-align: center; }
+.dl-pro-stats-row > span:nth-child(3) { flex: 1; text-align: right; }
 
 
 

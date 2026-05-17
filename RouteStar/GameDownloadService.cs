@@ -348,8 +348,10 @@ namespace RouteStar
             return actual == expectedMd5.ToLowerInvariant();
         }
 
-        // ── 解压 ZIP（带进度报告，支持分卷）────────────────────────────────────────────
-        public static async Task ExtractZipAsync(List<string> zipParts, string destDir, Action<string> onFileExtracted, CancellationToken ct)
+        // ── 解压 ZIP（带真实字节进度报告，支持分卷）──────────────────────────────────
+        // callback: (entryName, extractedUncompressedBytes, totalUncompressedBytes)
+        public static async Task ExtractZipAsync(List<string> zipParts, string destDir,
+            Action<string, long, long> onProgress, CancellationToken ct)
         {
             await Task.Run(() =>
             {
@@ -357,11 +359,19 @@ namespace RouteStar
                 using Stream stream = zipParts.Count > 1 ? new CombinedStream(zipParts) : File.OpenRead(zipParts[0]);
                 using var archive = SharpCompress.Archives.Zip.ZipArchive.Open(stream);
                 var options = new ExtractionOptions { ExtractFullPath = true, Overwrite = true };
-                foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
+
+                // 先枚举所有 entry 以计算解压总大小
+                var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
+                long totalUncompressed = entries.Sum(e => e.Size);
+                if (totalUncompressed <= 0) totalUncompressed = 1; // 防零除
+
+                long extractedBytes = 0;
+                foreach (var entry in entries)
                 {
                     ct.ThrowIfCancellationRequested();
                     entry.WriteToDirectory(destDir, options);
-                    onFileExtracted(entry.Key ?? "");
+                    extractedBytes += entry.Size;
+                    onProgress(entry.Key ?? "", extractedBytes, totalUncompressed);
                 }
             }, ct);
         }
@@ -394,34 +404,34 @@ namespace RouteStar
 
             public override int Read(byte[] buffer, int offset, int count)
             {
-                int totalBytesRead = 0;
+                if (count == 0) return 0;
 
-                while (totalBytesRead < count)
+                // 找到当前 _position 所在的分卷
+                long pos = _position;
+                int streamIdx = 0;
+                long streamStart = 0;
+
+                while (streamIdx < _streams.Length && pos >= streamStart + _lengths[streamIdx])
                 {
-                    long pos = _position;
-                    int streamIdx = 0;
-                    long streamStart = 0;
-
-                    while (streamIdx < _streams.Length && pos >= streamStart + _lengths[streamIdx])
-                    {
-                        streamStart += _lengths[streamIdx];
-                        streamIdx++;
-                    }
-
-                    if (streamIdx >= _streams.Length) break; // EOF across all parts
-
-                    var currentStream = _streams[streamIdx];
-                    currentStream.Position = pos - streamStart;
-
-                    int remainingInPart = (int)(_lengths[streamIdx] - (pos - streamStart));
-                    int bytesToRead = Math.Min(count - totalBytesRead, remainingInPart);
-                    int bytesRead = currentStream.Read(buffer, offset + totalBytesRead, bytesToRead);
-                    if (bytesRead == 0) break; // unexpected EOF within a part
-
-                    _position += bytesRead;
-                    totalBytesRead += bytesRead;
+                    streamStart += _lengths[streamIdx];
+                    streamIdx++;
                 }
-                return totalBytesRead;
+
+                if (streamIdx >= _streams.Length) return 0; // 所有分卷已读完
+
+                var currentStream = _streams[streamIdx];
+                long posInPart = pos - streamStart;
+                currentStream.Position = posInPart;
+
+                // 本次只读到当前分卷末尾为止，不跨卷
+                // (SharpCompress 会自行重复调用 Read 来累积字节)
+                int remainingInPart = (int)Math.Min(_lengths[streamIdx] - posInPart, (long)(buffer.Length - offset));
+                int actualCount = Math.Min(count, remainingInPart);
+                if (actualCount <= 0) return 0;
+
+                int bytesRead = currentStream.Read(buffer, offset, actualCount);
+                _position += bytesRead;
+                return bytesRead;
             }
 
             public override int ReadByte()

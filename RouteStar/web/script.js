@@ -333,6 +333,9 @@ document.addEventListener('DOMContentLoaded', () => {
             launchAppBtn.disabled = true;
             const preDownloadBtn = document.getElementById('pre-download-btn');
             if (preDownloadBtn) preDownloadBtn.style.display = 'none';
+            // 切换游戏时立刻隐藏下载面板，防止其他游戏的进度串台显示
+            const dlPanel = document.getElementById('download-panel');
+            if (dlPanel) dlPanel.classList.remove('active');
             const installDir = getHoyoFolderPath(path);
             if (window.chrome) window.chrome.webview.postMessage({ type: 'get_game_status', appKey: path, installDir });
         } else {
@@ -360,14 +363,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const textEl = document.getElementById('launch-btn-text');
         const subtextEl = document.getElementById('launch-btn-subtext');
 
-        const setBtnState = (icon, text, subtext, isDownloading, callback) => {
+        const setBtnState = (text, isDownloading, callback, forceDisabled = false) => {
             launchBtn.className = isDownloading ? 'launch-btn-yellow downloading-state' : 'launch-btn-yellow';
-            launchBtn.disabled = false;
-            iconEl.textContent = icon || '';
-            iconEl.style.display = icon ? '' : 'none';
+            launchBtn.disabled = forceDisabled;
+            iconEl.style.display = 'none';
             textEl.textContent = text;
-            subtextEl.textContent = subtext || '';
-            _hoyoActionCallback = callback || null;
+            subtextEl.textContent = '';
+            _hoyoActionCallback = forceDisabled ? null : (callback || null);
         };
 
         if (dlPanel) dlPanel.classList.remove('active');
@@ -375,16 +377,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         switch (state) {
             case 'not_installed':
-                setBtnState('download', '获取游戏', `${data?.downloadSizeGB || 0} GB`, false, () => installHoyoGame(appKey, data?.downloadSizeGB, data?.decompressedSizeGB));
+                setBtnState('获取游戏', false, () => installHoyoGame(appKey, data?.downloadSizeGB, data?.decompressedSizeGB));
                 break;
             case 'installed':
-                setBtnState('play_arrow', '开始游戏', null, false, null);
+                setBtnState('开始游戏', false, null);
                 break;
             case 'needs_update':
-                setBtnState('update', '更新游戏', `${data?.downloadSizeGB || 0} GB`, false, () => updateHoyoGame(appKey));
+                setBtnState('更新游戏', false, () => updateHoyoGame(appKey));
                 break;
             case 'pre_download':
-                setBtnState('play_arrow', '开始游戏', null, false, null);
+                setBtnState('开始游戏', false, null);
                 if (preBtn) {
                     preBtn.style.display = '';
                     preBtn.textContent = `预下载 v${data.preDownloadVersion} (${data.downloadSizeGB} GB)`;
@@ -392,12 +394,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 break;
             case 'downloading':
+                setBtnState('暂停下载', true, () => window.chrome?.webview?.postMessage({ type: 'pause_download' }));
+                if (dlPanel) dlPanel.classList.add('active');
+                break;
             case 'extracting':
-                setBtnState('pause_circle', '暂停下载', null, true, () => window.chrome?.webview?.postMessage({ type: 'pause_download' }));
+                // 解压阶段禁用暂停，按钮灰化不可点击
+                setBtnState('解压中...', true, null, true);
                 if (dlPanel) dlPanel.classList.add('active');
                 break;
             case 'paused':
-                setBtnState('play_arrow', '继续下载', null, true, () => {
+                setBtnState('继续下载', true, () => {
                     const dir = getHoyoFolderPath(appKey);
                     // 直接带目录续传，不弹文件选择器
                     window.chrome?.webview?.postMessage({ type: 'start_install', appKey, installDir: dir });
@@ -854,11 +860,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (phase === 'cancelled' || phase === 'error') {
-                    if (dlPanel) dlPanel.classList.remove('active');
-                    applyHoyoGameState(appKey, 'not_installed', { downloadSizeGB: 0 }); // Fallback UI state
-                    if (phase === 'error' && data.errorMessage) {
-                        console.error('[Download Error]', data.errorMessage);
+                    if (phase === 'error' && data.errorMessage && appKey === currentAppPath) {
+                        // 在面板内显示友好错误提示，5秒后自动隐藏
+                        if (dlPanel) {
+                            dlPanel.classList.add('active');
+                            const phaseIconEl = document.getElementById('dl-phase-icon');
+                            const phaseTextEl = document.getElementById('dl-phase-text');
+                            const pctEl = document.getElementById('dl-pro-percent');
+                            if (phaseIconEl) phaseIconEl.textContent = 'error';
+                            if (phaseIconEl) phaseIconEl.style.color = '#f87171';
+                            if (phaseTextEl) { phaseTextEl.textContent = data.errorMessage; phaseTextEl.style.color = '#f87171'; }
+                            if (pctEl) pctEl.textContent = '';
+                            setTimeout(() => {
+                                dlPanel.classList.remove('active');
+                                if (phaseIconEl) phaseIconEl.style.color = '';
+                                if (phaseTextEl) phaseTextEl.style.color = '';
+                            }, 5000);
+                        }
+                    } else {
+                        if (dlPanel) dlPanel.classList.remove('active');
                     }
+                    applyHoyoGameState(appKey, 'not_installed', { downloadSizeGB: 0 });
                     return;
                 }
                 
@@ -867,9 +889,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                // 更新进度面板
-                if (dlPanel) dlPanel.classList.add('active');
-                applyHoyoGameState(appKey, phase === 'extracting' ? 'extracting' : 'downloading', {});
+                // 只有当前显示的游戏才更新进度面板，避免其他游戏的下载串台
+                if (appKey === currentAppPath) {
+                    if (dlPanel) dlPanel.classList.add('active');
+                    applyHoyoGameState(appKey, phase === 'extracting' ? 'extracting' : 'downloading', {});
+                }
 
                 const pct = totalBytes > 0 ? (bytesDownloaded / totalBytes * 100) : 0;
 
@@ -884,13 +908,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // ETA
                 const formattedEta = formatEta(totalBytes - bytesDownloaded, speedBytesPerSec);
                 const etaEl = document.getElementById('dl-eta-text');
-                if (etaEl) etaEl.textContent = phase === 'downloading' ? formattedEta : '--:--:--';
+                if (etaEl) etaEl.textContent = (phase === 'downloading' || phase === 'extracting') ? formattedEta : '--:--:--';
 
                 // 统计
                 const progEl = document.getElementById('dl-progress-text');
                 if (progEl) progEl.textContent = `${formatBytes(bytesDownloaded)} / ${formatBytes(totalBytes)}`;
                 const speedEl = document.getElementById('dl-speed-text');
-                if (speedEl) speedEl.textContent = phase === 'downloading' ? formatSpeed(speedBytesPerSec) : '--';
+                if (speedEl) speedEl.textContent = (phase === 'downloading' || phase === 'extracting') ? formatSpeed(speedBytesPerSec) : '--';
 
                 // 阶段图标/文字
                 const phaseLabels = {
@@ -1265,6 +1289,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         <p style="font-size:0.85rem; color:rgba(255,255,255,0.4); margin-bottom:16px;">这只会从 RouteStar 的列表中移除该游戏，不会删除您的游戏文件。您可以随时重新添加。</p>
                         <button id="btn-hoyo-remove" class="hoyo-action-btn hoyo-btn-danger" style="width:100%; justify-content:center;">确认移除</button>
                     </div>
+                    <div class="hoyo-card" style="border-color:rgba(248, 113, 113, 0.35); margin-top:12px;">
+                        <div style="color:#ef4444; font-weight:600; margin-bottom:8px;">卸载游戏</div>
+                        <p style="font-size:0.85rem; color:rgba(255,255,255,0.4); margin-bottom:16px;">这将彻底删除游戏安装目录下的所有文件，此操作不可撤销。</p>
+                        <div id="hoyo-uninstall-confirm-area" style="display:none; margin-bottom:12px;">
+                            <p style="font-size:0.85rem; color:#f87171; margin-bottom:8px;">将删除目录：<strong id="hoyo-uninstall-path" style="word-break:break-all;"></strong></p>
+                        </div>
+                        <button id="btn-hoyo-uninstall" class="hoyo-action-btn hoyo-btn-danger" style="width:100%; justify-content:center;">卸载游戏</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -1342,6 +1374,37 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         document.getElementById('btn-hoyo-remove').addEventListener('click', removeFn);
         document.getElementById('btn-hoyo-remove-alt').addEventListener('click', removeFn);
+
+        // 8. 卸载游戏
+        const uninstallBtn = document.getElementById('btn-hoyo-uninstall');
+        const uninstallConfirmArea = document.getElementById('hoyo-uninstall-confirm-area');
+        const uninstallPathEl = document.getElementById('hoyo-uninstall-path');
+        let _uninstallConfirmed = false;
+
+        if (uninstallBtn) {
+            uninstallBtn.addEventListener('click', () => {
+                if (!curPath) {
+                    uninstallBtn.textContent = '未配置安装目录';
+                    uninstallBtn.disabled = true;
+                    return;
+                }
+                if (!_uninstallConfirmed) {
+                    // 第一次点击：显示确认
+                    _uninstallConfirmed = true;
+                    uninstallConfirmArea.style.display = 'block';
+                    uninstallPathEl.textContent = curPath;
+                    uninstallBtn.textContent = '确认卸载 —— 此操作不可撤销';
+                    uninstallBtn.style.background = 'rgba(239, 68, 68, 0.3)';
+                } else {
+                    // 第二次点击：执行卸载
+                    if (window.chrome && window.chrome.webview) {
+                        window.chrome.webview.postMessage({ type: 'uninstall_game', appKey: id, installDir: curPath });
+                    }
+                    // 同时从列表移除
+                    removeFn();
+                }
+            });
+        }
     }
 
 

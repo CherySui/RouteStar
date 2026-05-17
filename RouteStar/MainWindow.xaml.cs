@@ -18,6 +18,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.UI.Windowing;
+using Microsoft.UI;
+using Windows.Graphics;
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
 
@@ -48,8 +51,40 @@ namespace RouteStar
             // 核心：无边框沉浸式并保留原生阴影贴靠
             this.ExtendsContentIntoTitleBar = true;
             this.SetTitleBar(AppTitleBar);
+
+            // 锁定窗口尺寸为 1180x700，禁止最大化和手动拖拽调调艰大小
+            var appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(
+                WinRT.Interop.WindowNative.GetWindowHandle(this)));
+
+            if (appWindow != null)
+            {
+                // 使用 OverlappedPresenter 禁用最大化和调调大小
+                var presenter = appWindow.Presenter as OverlappedPresenter
+                    ?? OverlappedPresenter.Create();
+                presenter.IsMaximizable = false;
+                presenter.IsResizable = false;
+                appWindow.SetPresenter(presenter);
+
+                // 计算 DPI 缩放比例，将逻辑像素转换为物理像素
+                double scale = 1.0;
+                try
+                {
+                    var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                    uint dpiVal = GetDpiForWindow(hwnd);
+                    scale = dpiVal / 96.0;
+                }
+                catch { }
+
+                int targetW = (int)(1180 * scale);
+                int targetH = (int)(700 * scale);
+                appWindow.Resize(new SizeInt32(targetW, targetH));
+            }
+
             InitializeWebViewAsync();
         }
+
+        [DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr hwnd);
 
         private async void InitializeWebViewAsync()
         {
@@ -504,6 +539,41 @@ namespace RouteStar
                             }
                         }
                     }
+                    else if (actionType == "uninstall_game")
+                    {
+                        string installDir = root.TryGetProperty("installDir", out var udEl) ? udEl.GetString() ?? "" : "";
+                        if (!string.IsNullOrEmpty(installDir) && System.IO.Directory.Exists(installDir))
+                        {
+                            // 安全检查：不能删除驱动器根目录
+                            string fullPath = Path.GetFullPath(installDir);
+                            string? pathRoot = Path.GetPathRoot(fullPath);
+                            if (fullPath == pathRoot)
+                            {
+                                System.Diagnostics.Debug.WriteLine("[Uninstall] 拒绝删除驱动器根目录");
+                                return;
+                            }
+                            // 安全检查：不能删除自己所在的目录
+                            string appBase = AppContext.BaseDirectory.TrimEnd('/', '\\');
+                            if (appBase.StartsWith(fullPath, StringComparison.OrdinalIgnoreCase))
+                            {
+                                System.Diagnostics.Debug.WriteLine("[Uninstall] 拒绝删除应用自身所在目录");
+                                return;
+                            }
+
+                            _ = Task.Run(() =>
+                            {
+                                try
+                                {
+                                    System.IO.Directory.Delete(installDir, true);
+                                    System.Diagnostics.Debug.WriteLine($"[Uninstall] 已删除目录: {installDir}");
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[Uninstall] 删除失败: {ex.Message}");
+                                }
+                            });
+                        }
+                    }
                     else if (actionType == "get_game_status")
                     {
                         // JS 请求检测指定游戏的安装状态
@@ -666,23 +736,46 @@ namespace RouteStar
                                     })
                                     .ToList();
 
-                                long totalExtractedBytes = 0;
+                                // 解压速度采样状态
+                                var extractStartTime = DateTime.UtcNow;
+                                var lastSampleTime   = DateTime.UtcNow;
+                                long lastSampleBytes = 0L;
+                                long extractSpeed    = 0L; // bytes/s
+
                                 foreach (var group in fileGroups)
                                 {
                                     ct.ThrowIfCancellationRequested();
-                                    
-                                    // Ensure parts are ordered (.001, .002, etc.)
                                     var parts = group.OrderBy(f => f).ToList();
-                                    string baseName = Path.GetFileName(group.Key);
+                                    int entryCount = 0;
 
-                                    await GameDownloadService.ExtractZipAsync(parts, finalInstallDir, (entry) =>
+                                    await GameDownloadService.ExtractZipAsync(parts, finalInstallDir,
+                                        (entry, extractedInGroup, totalInGroup) =>
                                     {
-                                        totalExtractedBytes++;
-                                        if (totalExtractedBytes % 50 == 0)
+                                        entryCount++;
+
+                                        // 每 20 个 entry 采样一次速度
+                                        if (entryCount % 20 == 0 || extractedInGroup == totalInGroup)
                                         {
+                                            var now = DateTime.UtcNow;
+                                            double elapsed = (now - lastSampleTime).TotalSeconds;
+                                            if (elapsed >= 0.2)
+                                            {
+                                                long delta = extractedInGroup - lastSampleBytes;
+                                                extractSpeed    = (long)(delta / elapsed);
+                                                lastSampleTime  = now;
+                                                lastSampleBytes = extractedInGroup;
+                                            }
+
+                                            long snapExtracted = extractedInGroup;
+                                            long snapTotal     = totalInGroup;
+                                            long snapSpeed     = extractSpeed;
                                             DispatcherQueue.TryEnqueue(() =>
                                             {
-                                                var eProg = new { type = "download_progress", appKey, phase = "extracting", currentFile = entry, bytesDownloaded = totalBytes, totalBytes, speedBytesPerSec = 0L };
+                                                var eProg = new { type = "download_progress", appKey,
+                                                    phase = "extracting", currentFile = entry,
+                                                    bytesDownloaded = snapExtracted,
+                                                    totalBytes = snapTotal,
+                                                    speedBytesPerSec = snapSpeed };
                                                 LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(eProg));
                                             });
                                         }
@@ -711,6 +804,17 @@ namespace RouteStar
                                 {
                                     var cancelled = new { type = "download_progress", appKey, phase = finalPhase, bytesDownloaded = 0L, totalBytes = 0L, speedBytesPerSec = 0L, currentFile = "" };
                                     LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(cancelled));
+                                });
+                            }
+                            catch (IOException ioEx) when (ioEx.HResult == unchecked((int)0x80070070) || ioEx.Message.Contains("磁盘空间不足") || ioEx.Message.Contains("disk") || ioEx.Message.Contains("space"))
+                            {
+                                // 磁盘空间不足 — 单独提示，不清空下载状态
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    var err = new { type = "download_progress", appKey, phase = "error",
+                                        errorMessage = "磁盘空间不足，请清理磁盘后重试。",
+                                        bytesDownloaded = 0L, totalBytes = 0L, speedBytesPerSec = 0L, currentFile = "" };
+                                    LauncherWebView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(err));
                                 });
                             }
                             catch (Exception ex)
