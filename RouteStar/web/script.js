@@ -418,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function installHoyoGame(appKey, downloadSizeGB, decompressedSizeGB) {
         if (!window.chrome) return;
         _pendingInstallAppKey = appKey;
-        
+
         const cfg = appRegistry[appKey];
         if (cfg) {
             let iconSrc = '';
@@ -883,7 +883,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     applyHoyoGameState(appKey, 'not_installed', { downloadSizeGB: 0 });
                     return;
                 }
-                
+
                 if (phase === 'paused') {
                     applyHoyoGameState(appKey, 'paused', { downloadSizeGB: 0, useIncrementalPatch: false });
                     return;
@@ -919,8 +919,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 阶段图标/文字
                 const phaseLabels = {
                     downloading: { icon: 'downloading', text: '下载中' },
-                    verifying:   { icon: 'verified',    text: '校验中' },
-                    extracting:  { icon: 'folder_zip',  text: '解压中' },
+                    verifying: { icon: 'verified', text: '校验中' },
+                    extracting: { icon: 'folder_zip', text: '解压中' },
                 };
                 const phaseMeta = phaseLabels[phase] || { icon: 'downloading', text: '处理中' };
                 const phaseIconEl = document.getElementById('dl-phase-icon');
@@ -1701,17 +1701,35 @@ document.addEventListener('DOMContentLoaded', () => {
     sidebarItems.forEach(item => {
         item.addEventListener('click', () => {
             if (item.classList.contains('sidebar-separator')) return;
+
+            const tab = item.getAttribute('data-tab');
+
             sidebarItems.forEach(i => i.classList.remove('active'));
             tabPanes.forEach(pane => pane.classList.remove('active'));
             item.classList.add('active');
-            const targetId = 'tab-' + item.getAttribute('data-tab');
+            const targetId = 'tab-' + tab;
             const targetPane = document.getElementById(targetId);
             if (targetPane) targetPane.classList.add('active');
 
             // 切到抽卡页时，自动加载当前选中游戏的本地缓存
-            if (item.getAttribute('data-tab') === 'tool-hoyo-gacha') {
+            if (tab === 'tool-hoyo-gacha') {
                 loadGachaCache(currentGachaBiz);
             }
+        });
+    });
+
+    // 偏好设置内部分栏 Tab 切换
+    const prefSidebarItems = document.querySelectorAll('.pref-sidebar-item');
+    const prefTabPanes = document.querySelectorAll('.pref-tab-pane');
+    prefSidebarItems.forEach(item => {
+        item.addEventListener('click', () => {
+            prefSidebarItems.forEach(i => i.classList.remove('active'));
+            prefTabPanes.forEach(pane => pane.classList.remove('active'));
+
+            item.classList.add('active');
+            const targetId = item.getAttribute('data-pref-tab');
+            const targetPane = document.getElementById(targetId);
+            if (targetPane) targetPane.classList.add('active');
         });
     });
 
@@ -1792,12 +1810,53 @@ document.addEventListener('DOMContentLoaded', () => {
     const gachaStatusPanel = document.getElementById('gacha-status-panel');
     const gachaStatusText = document.getElementById('gacha-status-text');
     const gachaResultContainer = document.getElementById('gacha-result-container');
+    const uidDropdown = document.getElementById('gacha-uid-dropdown');
+    const uidHeader = document.getElementById('gacha-uid-header');
+    const uidSelectedText = document.getElementById('gacha-uid-selected-text');
+    const uidList = document.getElementById('gacha-uid-list');
+
+    let currentGachaLogs = [];
+    let selectedUid = null;
+
+    if (uidHeader) {
+        uidHeader.addEventListener('click', (e) => {
+            e.stopPropagation();
+            uidDropdown.classList.toggle('open');
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (uidDropdown && !uidDropdown.contains(e.target)) {
+                uidDropdown.classList.remove('open');
+            }
+        });
+    }
+
+    function selectUidItem(uid, displayText) {
+        selectedUid = uid;
+        if (uidSelectedText) uidSelectedText.textContent = displayText;
+
+        // Update selected state in list
+        if (uidList) {
+            Array.from(uidList.children).forEach(child => {
+                if (child.dataset.uid === String(uid)) {
+                    child.classList.add('selected');
+                } else {
+                    child.classList.remove('selected');
+                }
+            });
+        }
+
+        uidDropdown.classList.remove('open');
+        renderLogsForUid(uid);
+    }
 
     // --- Tab 切换 + 自动加载缓存 ---
     let currentGachaBiz = 'hkrpg_cn';
     const gachaTabs = document.querySelectorAll('.gacha-tab');
 
     function loadGachaCache(biz) {
+        if (uidDropdown) uidDropdown.style.display = 'none';
         window.chrome.webview.postMessage({ type: 'load_gacha_cache', gameBiz: biz });
     }
 
@@ -1818,6 +1877,7 @@ document.addEventListener('DOMContentLoaded', () => {
             gachaStatusPanel.style.display = 'flex';
             gachaStatusText.textContent = '正在从本地缓存提取 URL...';
             gachaResultContainer.innerHTML = '';
+            if (uidDropdown) uidDropdown.style.display = 'none';
 
             let manualPath = '';
             if (gameBiz.includes('hk4e')) manualPath = gamePaths.genshin;
@@ -1881,11 +1941,75 @@ document.addEventListener('DOMContentLoaded', () => {
                 showGachaError(msg.error || '未知错误');
                 return;
             }
-            const stats = processGachaLogs(msg.logs);
-            renderGachaStats(stats);
+
+            currentGachaLogs = msg.logs;
+
+            if (uidDropdown && uidList) {
+                // Find unique UIDs
+                const uids = new Set();
+                currentGachaLogs.forEach(log => {
+                    if (log.uid) uids.add(log.uid);
+                });
+                const uniqueUids = Array.from(uids).sort();
+
+                if (uniqueUids.length > 0) {
+                    uidList.innerHTML = '';
+
+                    const hasLegacy = currentGachaLogs.some(log => !log.uid);
+
+                    uniqueUids.forEach(uid => {
+                        const opt = document.createElement('div');
+                        opt.className = 'uid-capsule-item';
+                        opt.dataset.uid = String(uid);
+                        opt.textContent = uid;
+                        opt.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            selectUidItem(uid, uid);
+                        });
+                        uidList.appendChild(opt);
+                    });
+
+                    if (hasLegacy) {
+                        const opt = document.createElement('div');
+                        opt.className = 'uid-capsule-item';
+                        opt.dataset.uid = 'legacy';
+                        opt.textContent = '早期历史(无UID)';
+                        opt.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            selectUidItem('legacy', '早期历史(无UID)');
+                        });
+                        uidList.appendChild(opt);
+                    }
+
+                    uidDropdown.style.display = 'block';
+
+                    // Render the first UID by default
+                    selectUidItem(uniqueUids[0], uniqueUids[0]);
+                } else {
+                    uidDropdown.style.display = 'none';
+                    // Fallback if no uid property exists
+                    const stats = processGachaLogs(currentGachaLogs);
+                    renderGachaStats(stats);
+                }
+            } else {
+                const stats = processGachaLogs(currentGachaLogs);
+                renderGachaStats(stats);
+            }
+
             gachaStatusPanel.style.display = 'none';
         }
     });
+
+    function renderLogsForUid(uid) {
+        let logsForUid;
+        if (uid === 'legacy') {
+            logsForUid = currentGachaLogs.filter(log => !log.uid);
+        } else {
+            logsForUid = currentGachaLogs.filter(log => log.uid === String(uid));
+        }
+        const stats = processGachaLogs(logsForUid);
+        renderGachaStats(stats);
+    }
 
     function processGachaLogs(logs) {
         logs.sort((a, b) => a.id.localeCompare(b.id));

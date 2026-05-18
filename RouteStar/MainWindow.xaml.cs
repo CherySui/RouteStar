@@ -427,17 +427,12 @@ namespace RouteStar
                         string cacheFile = Path.Combine(AppContext.BaseDirectory, $"gacha_{gameBiz}.json");
                         var cachedLogs = LoadGachaCache(cacheFile);
 
-                        // 计算每个卡池最新的已知 ID（增量拉取的停止点）
-                        var maxKnownIds = cachedLogs
-                            .GroupBy(l => l.gacha_type)
-                            .ToDictionary(g => g.Key, g => g.Max(l => l.id));
-
                         // 在 C# 后端执行 HTTP 请求，绕过 CORS
                         _ = Task.Run(async () =>
                         {
                             try
                             {
-                                var newLogs = await FetchAllGachaLogsAsync(gameBiz, url, maxKnownIds, (status) =>
+                                var newLogs = await FetchAllGachaLogsAsync(gameBiz, url, cachedLogs, (status) =>
                                 {
                                     DispatcherQueue.TryEnqueue(() =>
                                     {
@@ -889,7 +884,7 @@ namespace RouteStar
         // 本地缓存 I/O
         // =========================================================
 
-        private record GachaLogEntry(string id, string name, string item_type, string rank_type, string gacha_type, string gacha_type_name, string time);
+        private record GachaLogEntry(string id, string uid, string name, string item_type, string rank_type, string gacha_type, string gacha_type_name, string time);
 
         private List<GachaLogEntry> LoadGachaCache(string path)
         {
@@ -921,7 +916,7 @@ namespace RouteStar
 
         private async Task<List<GachaLogEntry>> FetchAllGachaLogsAsync(
             string gameBiz, string gachaUrl,
-            Dictionary<string, string> maxKnownIds,
+            List<GachaLogEntry> cachedLogs,
             Action<string> progressCallback)
         {
             // 根据游戏类型决定 API 端点和卡池列表
@@ -974,7 +969,8 @@ namespace RouteStar
                 string endId = "0";
                 int page = 1;
                 string typeName = GetGachaTypeName(gameBiz, gachaType);
-                maxKnownIds.TryGetValue(typeKey, out string maxKnownId); // null 表示没有本地缓存
+                string maxKnownId = null;
+                bool maxKnownIdCalculated = false;
                 bool reachedKnown = false;
 
                 while (true)
@@ -1009,6 +1005,20 @@ namespace RouteStar
 
                     if (count == 0) break;
 
+                    if (!maxKnownIdCalculated)
+                    {
+                        string currentUid = list[0].TryGetProperty("uid", out var u) ? u.GetString() : "";
+                        if (!string.IsNullOrEmpty(currentUid) && cachedLogs != null)
+                        {
+                            maxKnownId = cachedLogs
+                                .Where(l => l.uid == currentUid && l.gacha_type == typeKey)
+                                .Select(l => l.id)
+                                .OrderByDescending(id => id)
+                                .FirstOrDefault();
+                        }
+                        maxKnownIdCalculated = true;
+                    }
+
                     foreach (var item in list.EnumerateArray())
                     {
                         string itemId = item.GetProperty("id").GetString();
@@ -1022,6 +1032,7 @@ namespace RouteStar
 
                         allLogs.Add(new GachaLogEntry(
                             id: itemId,
+                            uid: item.TryGetProperty("uid", out var u) ? u.GetString() : "",
                             name: item.GetProperty("name").GetString(),
                             item_type: item.TryGetProperty("item_type", out var it) ? it.GetString() : "",
                             rank_type: item.GetProperty("rank_type").GetString(),

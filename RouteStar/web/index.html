@@ -130,10 +130,23 @@
                                 <button class="gacha-tab small" data-biz="hk4e_global">国际·原神</button>
                                 <button class="gacha-tab small" data-biz="nap_global">国际·绝区</button>
                             </div>
-                            <button id="btn-extract-gacha" class="gacha-extract-btn">
-                                <span class="material-symbols-outlined">download</span>
-                                一键提取
-                            </button>
+                            <div class="gacha-actions" style="display: flex; align-items: center;">
+                                <div class="uid-capsule-wrap" id="gacha-uid-dropdown" style="display:none;">
+                                    <div class="uid-capsule-pills">
+                                        <button class="uid-capsule-btn" id="gacha-uid-header">
+                                            <span id="gacha-uid-selected-text"></span>
+                                            <span class="material-symbols-outlined uid-arrow">expand_more</span>
+                                        </button>
+                                    </div>
+                                    <div class="uid-capsule-list" id="gacha-uid-list">
+                                        <!-- UIDs populated here -->
+                                    </div>
+                                </div>
+                                <button id="btn-extract-gacha" class="gacha-extract-btn">
+                                    <span class="material-symbols-outlined">download</span>
+                                    一键提取
+                                </button>
+                            </div>
                         </div>
 
                         <div id="gacha-status-panel" class="gacha-status-panel" style="display:none;">
@@ -163,76 +176,79 @@
                         </div>
                     </div>
 
-
                     <div id="tab-tool-preferences" class="tools-tab-pane">
-                        <div class="settings-section">
-                            <h2 style="margin-top:0;">偏好设置</h2>
-                            <p class="tab-desc">在这里管理全局启动器配置与应用状态。</p>
-
-                            <div style="margin-top:32px;">
-                                <h3 style="margin-top:0;">应用排序</h3>
-                                <p class="tab-desc" style="font-size:0.85rem;">使用右侧的按钮自由调整顶栏图标位置，或直接将其移出启动器栈。</p>
-                                <div class="sortable-app-list" id="sortable-app-list"></div>
-                            </div>
-
-                            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.05);margin:32px 0;">
-
-                            <div>
-                                <h3 style="margin-top:0;">时长统计进程绑定</h3>
-                                <p class="tab-desc" style="font-size:0.85rem;">选择要管理的应用，并填写其对应的进程名称（无需加 .exe）。启动后系统会无感知地自动统计使用时长。</p>
-                                <div class="form-group" style="margin-bottom:16px;">
-                                    <label>选择目标应用</label>
-                                    <div class="custom-dropdown" id="time-tracking-dropdown" data-value="">
-                                        <div class="dropdown-header" id="time-tracking-header">
-                                            <span id="time-tracking-selected-text">-- 请选择应用 --</span>
-                                            <span class="material-symbols-outlined">expand_more</span>
-                                        </div>
-                                        <div class="dropdown-options" id="time-tracking-options" style="display:none;"></div>
-                                    </div>
+                        <div class="pref-layout">
+                            <div class="pref-sidebar">
+                                <div class="pref-sidebar-item active" data-pref-tab="pref-sort">
+                                    <span class="material-symbols-outlined">sort</span>应用排序
                                 </div>
-                                <div class="form-group">
-                                    <label>程序底层进程名称</label>
-                                    <input type="text" id="time-tracking-process-input" class="modern-input" placeholder="例如: LeagueClient, GenshinImpact 等...">
+                                <div class="pref-sidebar-item" data-pref-tab="pref-time">
+                                    <span class="material-symbols-outlined">timer</span>时长统计
                                 </div>
-                                <div style="display:flex;align-items:center;margin-top:24px;">
-                                    <button id="save-process-name-btn" class="primary-btn-small" style="max-width:120px;">应用绑定</button>
-                                    <span id="process-save-feedback" style="color:#34d399;font-size:0.85rem;margin-left:12px;opacity:0;transition:opacity 0.3s;">已保存 ✓</span>
+                                <div class="pref-sidebar-item" data-pref-tab="pref-path">
+                                    <span class="material-symbols-outlined">folder_open</span>游戏路径
                                 </div>
                             </div>
+                            
+                            <div class="pref-content">
+                                <!-- 应用排序 -->
+                                <div id="pref-sort" class="pref-tab-pane active">
+                                    <h2 style="margin-top:0; font-size:1.3rem;">应用排序</h2>
+                                    <p class="tab-desc" style="margin-bottom:24px;">拖动调整顶栏图标顺序，或将应用移出启动器栈。</p>
+                                    <div class="sortable-app-list" id="sortable-app-list"></div>
+                                </div>
 
-                            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.05);margin:32px 0;">
-
-                            <div style="margin-bottom:40px;">
-                                <h3 style="margin-top:0;">游戏路径配置</h3>
-                                <p class="tab-desc" style="font-size:0.85rem;">如果自动提取抽卡记录失败，请手动指定游戏安装目录（含有游戏 .exe 的文件夹）。</p>
-                                <div class="game-path-config">
-                                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-                                        <label style="width:80px;font-size:0.9rem;color:var(--text-secondary);">原神</label>
-                                        <div style="flex:1;display:flex;gap:8px;">
-                                            <input type="text" id="path-genshin" class="modern-input" style="flex:1;" placeholder="自动探测中...">
-                                            <button class="icon-btn-small" data-action="browse-path" data-target="path-genshin"><span class="material-symbols-outlined">folder_open</span></button>
+                                <!-- 时长统计 -->
+                                <div id="pref-time" class="pref-tab-pane">
+                                    <h2 style="margin-top:0; font-size:1.3rem;">时长统计进程绑定</h2>
+                                    <p class="tab-desc" style="margin-bottom:24px;">选择应用并填写进程名，系统将自动统计使用时长。</p>
+                                    <div class="form-group" style="margin-bottom:16px;">
+                                        <label>目标应用</label>
+                                        <div class="custom-dropdown" id="time-tracking-dropdown" data-value="">
+                                            <div class="dropdown-header" id="time-tracking-header">
+                                                <span id="time-tracking-selected-text">-- 请选择应用 --</span>
+                                                <span class="material-symbols-outlined">expand_more</span>
+                                            </div>
+                                            <div class="dropdown-options" id="time-tracking-options" style="display:none;"></div>
                                         </div>
                                     </div>
-                                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-                                        <label style="width:80px;font-size:0.9rem;color:var(--text-secondary);">星穹铁道</label>
-                                        <div style="flex:1;display:flex;gap:8px;">
-                                            <input type="text" id="path-starrail" class="modern-input" style="flex:1;" placeholder="自动探测中...">
-                                            <button class="icon-btn-small" data-action="browse-path" data-target="path-starrail"><span class="material-symbols-outlined">folder_open</span></button>
-                                        </div>
+                                    <div class="form-group" style="margin-bottom:24px;">
+                                        <label>进程名称</label>
+                                        <input type="text" id="time-tracking-process-input" class="modern-input" placeholder="例如: GenshinImpact">
                                     </div>
                                     <div style="display:flex;align-items:center;gap:12px;">
-                                        <label style="width:80px;font-size:0.9rem;color:var(--text-secondary);">绝区零</label>
-                                        <div style="flex:1;display:flex;gap:8px;">
-                                            <input type="text" id="path-zzz" class="modern-input" style="flex:1;" placeholder="自动探测中...">
-                                            <button class="icon-btn-small" data-action="browse-path" data-target="path-zzz"><span class="material-symbols-outlined">folder_open</span></button>
-                                        </div>
+                                        <button id="save-process-name-btn" class="primary-btn-small" style="max-width:120px;">应用绑定</button>
+                                        <span id="process-save-feedback" style="color:#34d399;font-size:0.85rem;opacity:0;transition:opacity 0.3s;">已保存 ✓</span>
+                                    </div>
+                                </div>
+
+                                <!-- 游戏路径 -->
+                                <div id="pref-path" class="pref-tab-pane">
+                                    <h2 style="margin-top:0; font-size:1.3rem;">游戏路径配置</h2>
+                                    <p class="tab-desc" style="margin-bottom:24px;">自动提取抽卡记录失败时，手动指定游戏安装目录。</p>
+                                    <div class="pref-path-row">
+                                        <span class="pref-path-label">原神</span>
+                                        <input type="text" id="path-genshin" class="modern-input" placeholder="自动探测中...">
+                                        <button class="icon-btn-small" data-action="browse-path" data-target="path-genshin"><span class="material-symbols-outlined">folder</span></button>
+                                    </div>
+                                    <div class="pref-path-row">
+                                        <span class="pref-path-label">星穹铁道</span>
+                                        <input type="text" id="path-starrail" class="modern-input" placeholder="自动探测中...">
+                                        <button class="icon-btn-small" data-action="browse-path" data-target="path-starrail"><span class="material-symbols-outlined">folder</span></button>
+                                    </div>
+                                    <div class="pref-path-row">
+                                        <span class="pref-path-label">绝区零</span>
+                                        <input type="text" id="path-zzz" class="modern-input" placeholder="自动探测中...">
+                                        <button class="icon-btn-small" data-action="browse-path" data-target="path-zzz"><span class="material-symbols-outlined">folder</span></button>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            </div>
+
+                </div> <!-- end tools-content -->
+
+            </div> <!-- end tools-page -->
         </main>
     </div>
 
