@@ -269,9 +269,13 @@ document.addEventListener('DOMContentLoaded', () => {
         homeDesc.textContent = config.desc;
 
         if (config.useVideo && config.bgVid) {
-            homeBgVideo.src = config.bgVid;
+            if (homeBgVideo.src !== config.bgVid) {
+                homeBgVideo.src = config.bgVid;
+                homeBgVideo.load();
+            }
             homeBgVideo.style.display = 'block';
             globalBgImage.style.backgroundImage = 'none';
+            homeBgVideo.play().catch(e => console.warn('video autoplay blocked', e));
         } else if (config.bgImg) {
             // 彻底卸载视频解码器，释放约 40-80MB GPU/CPU 内存
             homeBgVideo.pause();
@@ -344,9 +348,15 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('launch-btn-subtext').textContent = '';
             launchAppBtn.className = 'launch-btn-yellow';
             launchAppBtn.disabled = false;
+            
+            const preDownloadBtn = document.getElementById('pre-download-btn');
+            if (preDownloadBtn) preDownloadBtn.style.display = 'none';
+            const dlPanel = document.getElementById('download-panel');
+            if (dlPanel) dlPanel.classList.remove('active');
         }
 
         renderTodos(path);
+        renderPlaytimeChart(path);
     }
 
     // 全局 callback 存储（替代 onclick 避免二次触发）
@@ -388,9 +398,9 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'pre_download':
                 setBtnState('开始游戏', false, null);
                 if (preBtn) {
-                    preBtn.style.display = '';
-                    preBtn.textContent = `预下载 v${data.preDownloadVersion} (${data.downloadSizeGB} GB)`;
-                    preBtn.onclick = () => updateHoyoGame(appKey);
+                    preBtn.style.display = 'flex';
+                    preBtn.setAttribute('data-tooltip', `预下载 v${data.preDownloadVersion} (${data.downloadSizeGB} GB)`);
+                    preBtn.onclick = () => showPreDownloadConfirmDialog(appKey, data.downloadSizeGB, data.decompressedSizeGB);
                 }
                 break;
             case 'downloading':
@@ -414,10 +424,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let _pendingInstallAppKey = null;
+    let _installDialogMode = 'install'; // 'install' | 'predownload'
 
     function installHoyoGame(appKey, downloadSizeGB, decompressedSizeGB) {
         if (!window.chrome) return;
         _pendingInstallAppKey = appKey;
+        _installDialogMode = 'install';
 
         const cfg = appRegistry[appKey];
         if (cfg) {
@@ -429,8 +441,64 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('install-game-name').textContent = cfg.name;
         }
 
-        const defaultPath = getHoyoFolderPath(appKey) || `D:\\Games\\${cfg ? cfg.name : 'HoyoGame'}`;
-        document.getElementById('install-path-input').value = defaultPath;
+        // 恢复安装对话框状态
+        document.getElementById('install-dialog-title').textContent = '安装游戏';
+        const pathInput = document.getElementById('install-path-input');
+        if (pathInput) {
+            const defaultPath = getHoyoFolderPath(appKey) || `D:\\Games\\${cfg ? cfg.name : 'HoyoGame'}`;
+            pathInput.value = defaultPath;
+            pathInput.readOnly = false;
+            pathInput.style.pointerEvents = '';
+        }
+
+        const pickDirBtn = document.getElementById('btn-pick-install-dir');
+        if (pickDirBtn) {
+            pickDirBtn.disabled = false;
+            pickDirBtn.style.opacity = '';
+            pickDirBtn.style.pointerEvents = '';
+        }
+
+        document.getElementById('confirm-install-btn').textContent = '确认';
+
+        document.getElementById('install-decompressed-size').textContent = decompressedSizeGB ? `${decompressedSizeGB} GB` : '-- GB';
+        document.getElementById('install-download-size').textContent = downloadSizeGB ? `${downloadSizeGB} GB` : '-- GB';
+
+        document.getElementById('install-dialog').style.display = 'flex';
+    }
+
+    function showPreDownloadConfirmDialog(appKey, downloadSizeGB, decompressedSizeGB) {
+        if (!window.chrome) return;
+        _pendingInstallAppKey = appKey;
+        _installDialogMode = 'predownload';
+
+        const cfg = appRegistry[appKey];
+        if (cfg) {
+            let iconSrc = '';
+            if (cfg.localIcon) iconSrc = cfg.localIcon;
+            else if (cfg.base64Icon) iconSrc = 'data:image/png;base64,' + cfg.base64Icon;
+            else iconSrc = cfg.bgImg || '';
+            document.getElementById('install-game-icon').src = iconSrc;
+            document.getElementById('install-game-name').textContent = cfg.name;
+        }
+
+        // 切换为预下载对话框状态
+        document.getElementById('install-dialog-title').textContent = '游戏预下载';
+        const pathInput = document.getElementById('install-path-input');
+        if (pathInput) {
+            const defaultPath = getHoyoFolderPath(appKey);
+            pathInput.value = defaultPath;
+            pathInput.readOnly = true;
+            pathInput.style.pointerEvents = 'none';
+        }
+
+        const pickDirBtn = document.getElementById('btn-pick-install-dir');
+        if (pickDirBtn) {
+            pickDirBtn.disabled = true;
+            pickDirBtn.style.opacity = '0.5';
+            pickDirBtn.style.pointerEvents = 'none';
+        }
+
+        document.getElementById('confirm-install-btn').textContent = '开始预下载';
 
         document.getElementById('install-decompressed-size').textContent = decompressedSizeGB ? `${decompressedSizeGB} GB` : '-- GB';
         document.getElementById('install-download-size').textContent = downloadSizeGB ? `${downloadSizeGB} GB` : '-- GB';
@@ -452,6 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 点击输入框或者按钮都可以呼出文件夹选择
         const openPicker = () => {
+            if (_installDialogMode === 'predownload') return; // 预下载模式下禁止重新选择路径
             if (window.chrome) window.chrome.webview.postMessage({ type: 'pick_install_dir' });
         };
         if (pickDirBtn) pickDirBtn.addEventListener('click', openPicker);
@@ -462,7 +531,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!path) return;
             installDialog.style.display = 'none';
             if (window.chrome && _pendingInstallAppKey) {
-                window.chrome.webview.postMessage({ type: 'start_install', appKey: _pendingInstallAppKey, installDir: path });
+                if (_installDialogMode === 'predownload') {
+                    window.chrome.webview.postMessage({ type: 'start_update', appKey: _pendingInstallAppKey, installDir: path });
+                } else {
+                    window.chrome.webview.postMessage({ type: 'start_install', appKey: _pendingInstallAppKey, installDir: path });
+                }
             }
         });
     })();
@@ -529,6 +602,164 @@ document.addEventListener('DOMContentLoaded', () => {
     function getHoyoProcessName(id) {
         const info = HOYO_EXE_INFO[id];
         return info ? info.process : '';
+    }
+
+    function renderPlaytimeChart(appKey) {
+        const container = document.getElementById('playtime-chart-container');
+        const canvas = document.getElementById('playtime-chart');
+        const tooltip = document.getElementById('playtime-tooltip');
+        if (!container || !canvas) return;
+
+        // 判断是否为米家游戏
+        const isHoyo = appKey.startsWith('Hoyo_') || (appRegistry[appKey] && appRegistry[appKey].isHoyo);
+        
+        const todoList = document.getElementById('todo-list');
+        const todoInputGroup = document.querySelector('.todo-input-group');
+
+        if (!isHoyo) {
+            container.style.display = 'none';
+            if (todoList) todoList.style.display = 'block';
+            if (todoInputGroup) todoInputGroup.style.display = 'flex';
+            return;
+        }
+
+        container.style.display = 'block';
+        if (todoList) todoList.style.display = 'none';
+        if (todoInputGroup) todoInputGroup.style.display = 'none';
+        
+        // 调整分辨率
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+
+        const appData = appRegistry[appKey] || {};
+        const dailyUsage = appData.dailyUsage || {};
+
+        // 生成过去10天的日期并收集数据
+        const days = 10;
+        const data = [];
+        let maxSec = 0;
+
+        for (let i = days - 1; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+            const sec = dailyUsage[dateStr] || 0;
+            data.push({ date: dateStr, sec: sec });
+            if (sec > maxSec) maxSec = sec;
+        }
+
+        if (maxSec === 0) maxSec = 3600; // 默认最大值1小时防止除零
+
+        const w = canvas.width;
+        const h = canvas.height;
+        const paddingX = 4;
+        const paddingY = 4;
+        const usableW = w - paddingX * 2;
+        const usableH = h - paddingY * 2;
+        const stepX = usableW / (days - 1);
+        
+        let hoverIndex = -1;
+
+        function drawChart() {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, w, h);
+
+            const grad = ctx.createLinearGradient(paddingX, 0, paddingX + usableW * 0.5, 0);
+            grad.addColorStop(0, 'rgba(255, 214, 0, 0)');
+            grad.addColorStop(1, 'rgba(255, 214, 0, 1)');
+
+            // 如果有悬浮点，绘制虚线
+            if (hoverIndex >= 0) {
+                const x = paddingX + hoverIndex * stepX;
+                ctx.beginPath();
+                ctx.setLineDash([4, 4]);
+                ctx.moveTo(x, paddingY);
+                ctx.lineTo(x, h - paddingY);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // 绘制折线图
+            ctx.beginPath();
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+
+            data.forEach((val, index) => {
+                const x = paddingX + index * stepX;
+                const y = h - paddingY - (val.sec / maxSec) * usableH;
+                
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.stroke();
+
+            // 绘制数据点
+            ctx.fillStyle = '#18181a';
+            ctx.lineWidth = 1.5;
+            data.forEach((val, index) => {
+                if (val.sec > 0 || index === days - 1 || index === hoverIndex) {
+                    const x = paddingX + index * stepX;
+                    const y = h - paddingY - (val.sec / maxSec) * usableH;
+                    ctx.beginPath();
+                    ctx.arc(x, y, index === hoverIndex ? 4 : 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            });
+        }
+
+        drawChart();
+
+        // 绑定交互事件
+        canvas.onmousemove = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            
+            // 找到最接近的 X
+            let closestIndex = 0;
+            let minDist = Infinity;
+            for (let i = 0; i < days; i++) {
+                const x = paddingX + i * stepX;
+                const dist = Math.abs(mouseX - x);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestIndex = i;
+                }
+            }
+
+            if (minDist > stepX / 2) {
+                if (hoverIndex !== -1) {
+                    hoverIndex = -1;
+                    drawChart();
+                    if (tooltip) tooltip.style.display = 'none';
+                }
+                return;
+            }
+
+            if (hoverIndex !== closestIndex) {
+                hoverIndex = closestIndex;
+                drawChart();
+                if (tooltip) {
+                    const pt = data[closestIndex];
+                    tooltip.textContent = `${pt.date.substring(5)}: ${formatUsageTime(pt.sec)}`;
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (paddingX + closestIndex * stepX) + 'px';
+                    tooltip.style.top = (h - paddingY - (pt.sec / maxSec) * usableH) + 'px';
+                }
+            }
+        };
+
+        canvas.onmouseleave = () => {
+            hoverIndex = -1;
+            drawChart();
+            if (tooltip) tooltip.style.display = 'none';
+        };
     }
 
     function renderTodos(path) {
@@ -724,6 +955,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         display.textContent = data.path;
                         display.title = data.path;
                     }
+                    const boxes = document.querySelectorAll('.hoyo-path-box');
+                    boxes.forEach(b => {
+                        b.textContent = data.path;
+                        b.title = data.path;
+                    });
+                    renderAppPage(currentAppPath, true);
                     return;
                 }
 
@@ -735,6 +972,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (targetId === 'path-starrail') gamePaths.starrail = data.path;
                     if (targetId === 'path-zzz') gamePaths.zzz = data.path;
                     saveConfig();
+                    renderAppPage(currentAppPath, true);
                 }
             }
             else if (data.type === 'install_dir_picked') {
@@ -807,13 +1045,22 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (data.type === 'sync_usage_time') {
                 // C# 游戏会话结束时，一次性同步累计时长到前端
                 // (C# 已直接写入磁盘，这里仅更新内存状态和 UI 显示)
-                const { appKey, addSeconds } = data;
+                const { appKey, addSeconds, date } = data;
                 if (appKey && appRegistry[appKey]) {
                     appRegistry[appKey].usageSeconds = (appRegistry[appKey].usageSeconds || 0) + addSeconds;
+                    
+                    if (date) {
+                        if (!appRegistry[appKey].dailyUsage) {
+                            appRegistry[appKey].dailyUsage = {};
+                        }
+                        appRegistry[appKey].dailyUsage[date] = (appRegistry[appKey].dailyUsage[date] || 0) + addSeconds;
+                    }
+
                     // 若当前正在展示该应用，立即刷新 UI
                     if (currentAppPath === appKey) {
                         const uTimeSpan = document.getElementById('home-usage-time');
                         if (uTimeSpan) uTimeSpan.textContent = formatUsageTime(appRegistry[appKey].usageSeconds);
+                        renderPlaytimeChart(appKey);
                     }
                 }
             }
@@ -1580,6 +1827,8 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             if (pInput) pInput.value = '';
         }
+        
+
     }
 
     // Custom Dropdown logic setup
@@ -1730,6 +1979,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const targetId = item.getAttribute('data-pref-tab');
             const targetPane = document.getElementById(targetId);
             if (targetPane) targetPane.classList.add('active');
+            
+
+            if (targetId === 'pref-data') {
+                const list = document.getElementById('gacha-data-list');
+                if (list) list.innerHTML = '<div style="color:rgba(255,255,255,0.4); font-size:0.9rem; text-align:center; padding:20px;">加载中...</div>';
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.postMessage({ type: "get_all_gacha_uids" });
+                }
+            }
         });
     });
 
@@ -1834,7 +2092,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function selectUidItem(uid, displayText) {
         selectedUid = uid;
-        if (uidSelectedText) uidSelectedText.textContent = displayText;
+        if (uidSelectedText) {
+            let textToShow = String(displayText);
+            if (uid !== 'legacy' && textToShow.length > 3) {
+                textToShow = textToShow.substring(0, 3) + '...';
+            }
+            uidSelectedText.textContent = textToShow;
+        }
 
         // Update selected state in list
         if (uidList) {
@@ -1928,6 +2192,70 @@ document.addEventListener('DOMContentLoaded', () => {
     // 处理 C# 后端推送的抽卡消息
     window.chrome.webview.addEventListener('message', async (event) => {
         const msg = event.data;
+
+        if (msg.type === 'all_gacha_uids_result') {
+            const list = document.getElementById('gacha-data-list');
+            if (!list) return;
+            
+            if (!msg.data || msg.data.length === 0) {
+                list.innerHTML = '<div style="color:rgba(255,255,255,0.4); font-size:0.9rem; text-align:center; padding:20px;">暂无本地缓存数据</div>';
+                return;
+            }
+
+            let html = '';
+            const gameNames = {
+                'hk4e_cn': '原神',
+                'hk4e_global': '国际·原神',
+                'hkrpg_cn': '星穹铁道',
+                'hkrpg_global': '国际·星铁',
+                'nap_cn': '绝区零',
+                'nap_global': '国际·绝区零'
+            };
+
+            msg.data.forEach(gameData => {
+                const gameName = gameNames[gameData.gameBiz] || gameData.gameBiz;
+                gameData.uids.forEach(uid => {
+                    html += `
+                        <div class="data-mgmt-row">
+                            <div class="data-mgmt-info">
+                                <span class="data-mgmt-game">${gameName}</span>
+                                <span class="data-mgmt-uid">UID: ${uid}</span>
+                            </div>
+                            <button class="data-mgmt-delete-btn" title="删除记录" data-biz="${gameData.gameBiz}" data-uid="${uid}">
+                                <span class="material-symbols-outlined" style="pointer-events: none;">delete</span>
+                            </button>
+                        </div>
+                    `;
+                });
+            });
+            list.innerHTML = html;
+
+            const deleteBtns = list.querySelectorAll('.data-mgmt-delete-btn');
+            deleteBtns.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const biz = e.currentTarget.getAttribute('data-biz');
+                    const uid = e.currentTarget.getAttribute('data-uid');
+                    showConfirm(`确定要删除 ${gameNames[biz] || biz} UID:${uid} 的所有抽卡记录吗？此操作不可恢复。`).then(confirmed => {
+                        if (confirmed) {
+                            if (window.chrome && window.chrome.webview) {
+                                window.chrome.webview.postMessage({ type: "delete_gacha_uid", gameBiz: biz, uid: uid });
+                            }
+                        }
+                    });
+                });
+            });
+            return;
+        }
+        else if (msg.type === 'delete_gacha_uid_result') {
+            if (msg.success) {
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.postMessage({ type: "get_all_gacha_uids" });
+                }
+            } else {
+                alert('删除失败');
+            }
+            return;
+        }
 
         if (msg.type === 'gacha_fetch_started') {
             gachaStatusPanel.style.display = 'flex';
@@ -2145,3 +2473,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 }
 );
+
+function showConfirm(msg) {
+    return new Promise((resolve) => {
+        const dialog = document.getElementById('confirm-dialog');
+        const msgEl = document.getElementById('confirm-dialog-msg');
+        const btnOk = document.getElementById('confirm-dialog-ok');
+        const btnCancel = document.getElementById('confirm-dialog-cancel');
+        const btnClose = document.getElementById('close-confirm-dialog-btn');
+
+        if (!dialog) {
+            resolve(confirm(msg));
+            return;
+        }
+
+        msgEl.textContent = msg;
+        dialog.style.display = 'flex';
+
+        const cleanup = () => {
+            dialog.style.display = 'none';
+            btnOk.removeEventListener('click', onOk);
+            btnCancel.removeEventListener('click', onCancel);
+            btnClose.removeEventListener('click', onCancel);
+        };
+
+        const onOk = () => { cleanup(); resolve(true); };
+        const onCancel = () => { cleanup(); resolve(false); };
+
+        btnOk.addEventListener('click', onOk);
+        btnCancel.addEventListener('click', onCancel);
+        btnClose.addEventListener('click', onCancel);
+    });
+}

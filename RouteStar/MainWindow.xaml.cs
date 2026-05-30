@@ -78,6 +78,20 @@ namespace RouteStar
                 int targetW = (int)(1180 * scale);
                 int targetH = (int)(700 * scale);
                 appWindow.Resize(new SizeInt32(targetW, targetH));
+
+                // 设置窗口和任务栏图标
+                try
+                {
+                    string iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
+                    if (System.IO.File.Exists(iconPath))
+                    {
+                        appWindow.SetIcon(iconPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[IconError] 无法设置窗口图标: {ex.Message}");
+                }
             }
 
             InitializeWebViewAsync();
@@ -360,6 +374,17 @@ namespace RouteStar
                                                     {
                                                         int current = appNode["usageSeconds"]?.GetValue<int>() ?? 0;
                                                         appNode["usageSeconds"] = current + elapsedSeconds;
+                                                        
+                                                        // 记录每日时间
+                                                        string todayStr = DateTime.Now.ToString("yyyy-MM-dd");
+                                                        if (appNode["dailyUsage"] is not JsonObject dailyNode)
+                                                        {
+                                                            dailyNode = new JsonObject();
+                                                            appNode["dailyUsage"] = dailyNode;
+                                                        }
+                                                        int todaySeconds = dailyNode[todayStr]?.GetValue<int>() ?? 0;
+                                                        dailyNode[todayStr] = todaySeconds + elapsedSeconds;
+
                                                         File.WriteAllText(cfgPath, node.ToJsonString());
                                                     }
                                                 }
@@ -370,11 +395,12 @@ namespace RouteStar
                                             }
 
                                             // 若 WebView2 处于活跃状态，通知前端同步 UI 显示
+                                            string todayDate = DateTime.Now.ToString("yyyy-MM-dd");
                                             DispatcherQueue.TryEnqueue(() =>
                                             {
                                                 if (!_webViewSuspended && LauncherWebView.CoreWebView2 != null)
                                                 {
-                                                    var payload = new { type = "sync_usage_time", appKey = capturedAppKey, addSeconds = elapsedSeconds };
+                                                    var payload = new { type = "sync_usage_time", appKey = capturedAppKey, addSeconds = elapsedSeconds, date = todayDate };
                                                     LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
                                                 }
                                             });
@@ -392,6 +418,47 @@ namespace RouteStar
                             string configPath = Path.Combine(AppContext.BaseDirectory, "RouteStarConfig.json");
                             File.WriteAllText(configPath, configData);
                         }
+                    }
+                    else if (actionType == "get_all_gacha_uids")
+                    {
+                        var result = new List<object>();
+                        var files = Directory.GetFiles(AppContext.BaseDirectory, "gacha_*.json");
+                        foreach (var file in files)
+                        {
+                            string fileName = Path.GetFileNameWithoutExtension(file);
+                            string gameBiz = fileName.Substring(6); // Remove "gacha_"
+                            var logs = LoadGachaCache(file);
+                            var uids = logs.Select(l => l.uid).Where(u => !string.IsNullOrEmpty(u)).Distinct().ToList();
+                            if (uids.Count > 0)
+                            {
+                                result.Add(new { gameBiz = gameBiz, uids = uids });
+                            }
+                        }
+                        var resp = new { type = "all_gacha_uids_result", success = true, data = result };
+                        LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(resp));
+                    }
+                    else if (actionType == "delete_gacha_uid")
+                    {
+                        string gameBiz = root.GetProperty("gameBiz").GetString();
+                        string uid = root.GetProperty("uid").GetString();
+                        string cacheFile = Path.Combine(AppContext.BaseDirectory, $"gacha_{gameBiz}.json");
+                        bool success = false;
+                        if (File.Exists(cacheFile))
+                        {
+                            var logs = LoadGachaCache(cacheFile);
+                            var remainingLogs = logs.Where(l => l.uid != uid).ToList();
+                            if (remainingLogs.Count == 0)
+                            {
+                                File.Delete(cacheFile);
+                            }
+                            else
+                            {
+                                SaveGachaCache(cacheFile, remainingLogs);
+                            }
+                            success = true;
+                        }
+                        var resp = new { type = "delete_gacha_uid_result", success = success, gameBiz = gameBiz, uid = uid };
+                        LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(resp));
                     }
                     else if (actionType == "load_gacha_cache")
                     {
@@ -646,14 +713,25 @@ namespace RouteStar
                                 if (pkg?.main?.major == null) throw new Exception("无法获取安装包信息");
 
                                 string targetVersion = pkg.main.major.version ?? "";
+                                string? localVer = GameDownloadService.ReadLocalVersion(finalInstallDir);
+
+                                HypPackageResource? targetResource = pkg.main.major;
+                                List<HypPackageResource>? targetPatches = pkg.main.patches;
+
+                                // 如果是预下载情况：已是最新版，但有预下载包
+                                if (localVer == targetVersion && pkg.pre_download?.major?.version != null)
+                                {
+                                    targetResource = pkg.pre_download.major;
+                                    targetPatches = pkg.pre_download.patches;
+                                    targetVersion = targetResource.version ?? "";
+                                }
 
                                 // 判断使用增量包还是完整包
-                                string? localVer = GameDownloadService.ReadLocalVersion(finalInstallDir);
-                                var patch = (isUpdate && localVer != null)
-                                    ? pkg.main.patches?.FirstOrDefault(p => p.version == localVer)
+                                var patch = (isUpdate && localVer != null && targetPatches != null)
+                                    ? targetPatches.FirstOrDefault(p => p.version == localVer)
                                     : null;
 
-                                var filesToDownload = (patch != null ? patch.game_pkgs : pkg.main.major.game_pkgs) ?? new();
+                                var filesToDownload = (patch != null ? patch.game_pkgs : targetResource?.game_pkgs) ?? new();
                                 long totalBytes = filesToDownload.Sum(f => f.size);
 
                                 string tempDir = Path.Combine(finalInstallDir, "_routestar_tmp");

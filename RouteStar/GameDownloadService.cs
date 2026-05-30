@@ -215,19 +215,7 @@ namespace RouteStar
 
                 if (string.IsNullOrEmpty(localVersion))
                 {
-                    // 检测预下载
-                    string? preVer = pkg.pre_download?.major?.version;
-                    if (!string.IsNullOrEmpty(preVer))
-                    {
-                        long preSize = pkg.pre_download!.major!.game_pkgs?.Sum(p => p.size) ?? 0;
-                        return new GameStatusResult
-                        {
-                            State = GameInstallState.PreDownload,
-                            LatestVersion = latestVersion,
-                            PreDownloadVersion = preVer,
-                            DownloadSizeBytes = preSize,
-                        };
-                    }
+
                     return new GameStatusResult
                     {
                         State = GameInstallState.NotInstalled,
@@ -244,6 +232,7 @@ namespace RouteStar
                     if (!string.IsNullOrEmpty(preVer) && preVer != latestVersion)
                     {
                         long preSize = pkg.pre_download!.major!.game_pkgs?.Sum(p => p.size) ?? 0;
+                        long preDecomp = pkg.pre_download!.major!.game_pkgs?.Sum(p => p.decompressed_size) ?? 0;
                         return new GameStatusResult
                         {
                             State = GameInstallState.PreDownload,
@@ -251,6 +240,7 @@ namespace RouteStar
                             LatestVersion = latestVersion,
                             PreDownloadVersion = preVer,
                             DownloadSizeBytes = preSize,
+                            DecompressedSizeBytes = preDecomp,
                         };
                     }
                     return new GameStatusResult { State = GameInstallState.Installed, LocalVersion = localVersion, LatestVersion = latestVersion };

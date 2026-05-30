@@ -53,6 +53,10 @@
                             <span>使用时间</span>
                             <span id="home-usage-time" class="stat-value">0 h 0 min 0 s</span>
                         </div>
+                        <div class="playtime-chart-container" id="playtime-chart-container" style="display:none; height:80px; margin-top:12px; margin-bottom:12px; position:relative;">
+                            <canvas id="playtime-chart"></canvas>
+                            <div id="playtime-tooltip" class="chart-tooltip"></div>
+                        </div>
                         <div class="todo-list" id="todo-list">
                             <p class="empty-state">暂无待办</p>
                         </div>
@@ -85,12 +89,14 @@
                             </div>
                         </div>
 
+                        <button id="pre-download-btn" class="pre-download-btn" style="display:none;" data-tooltip="预下载">
+                            <span class="material-symbols-outlined">download</span>
+                        </button>
                         <button id="launch-app-btn" class="launch-btn-yellow">
                             <span class="material-symbols-outlined launch-btn-icon-el" id="launch-btn-icon" style="display:none;"></span>
                             <span id="launch-btn-text">启动</span>
                             <span id="launch-btn-subtext"></span>
                         </button>
-                        <button id="pre-download-btn" class="pre-download-btn" style="display:none;">预下载</button>
                         <button id="app-settings-btn" class="settings-hamburger-btn">
                             <span class="material-symbols-outlined">menu</span>
                         </button>
@@ -188,6 +194,9 @@
                                 <div class="pref-sidebar-item" data-pref-tab="pref-path">
                                     <span class="material-symbols-outlined">folder_open</span>游戏路径
                                 </div>
+                                <div class="pref-sidebar-item" data-pref-tab="pref-data">
+                                    <span class="material-symbols-outlined">database</span>数据管理
+                                </div>
                             </div>
                             
                             <div class="pref-content">
@@ -217,7 +226,7 @@
                                         <input type="text" id="time-tracking-process-input" class="modern-input" placeholder="例如: GenshinImpact">
                                     </div>
                                     <div style="display:flex;align-items:center;gap:12px;">
-                                        <button id="save-process-name-btn" class="primary-btn-small" style="max-width:120px;">应用绑定</button>
+                                        <button id="save-process-name-btn" class="yellow-btn-small" style="max-width:120px;">应用绑定</button>
                                         <span id="process-save-feedback" style="color:#34d399;font-size:0.85rem;opacity:0;transition:opacity 0.3s;">已保存 ✓</span>
                                     </div>
                                 </div>
@@ -240,6 +249,16 @@
                                         <span class="pref-path-label">绝区零</span>
                                         <input type="text" id="path-zzz" class="modern-input" placeholder="自动探测中...">
                                         <button class="icon-btn-small" data-action="browse-path" data-target="path-zzz"><span class="material-symbols-outlined">folder</span></button>
+                                    </div>
+                                </div>
+
+                                <!-- 数据管理 -->
+                                <div id="pref-data" class="pref-tab-pane">
+                                    <h2 style="margin-top:0; font-size:1.3rem;">抽卡记录数据管理</h2>
+                                    <p class="tab-desc" style="margin-bottom:24px;">管理已提取到本地的抽卡记录数据。删除后，对应 UID 的历史记录将被清除。</p>
+                                    <div id="gacha-data-list">
+                                        <!-- 动态渲染数据行 -->
+                                        <div style="color:rgba(255,255,255,0.4); font-size:0.9rem; text-align:center; padding:20px;">加载中...</div>
                                     </div>
                                 </div>
                             </div>
@@ -307,7 +326,7 @@
     <div id="install-dialog" class="modal-overlay" style="display:none; z-index:9000;">
         <div class="modal-card" style="width: 480px; padding: 24px;">
             <div class="modal-header" style="margin-bottom: 24px;">
-                <h2 style="font-size: 1.2rem;">安装游戏</h2>
+                <h2 id="install-dialog-title" style="font-size: 1.2rem;">安装游戏</h2>
                 <button id="close-install-dialog-btn" class="close-btn"><span class="material-symbols-outlined">close</span></button>
             </div>
             <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
@@ -391,6 +410,21 @@
                         <button class="game-card-add-btn">添加</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通用确认弹窗 -->
+    <div id="confirm-dialog" class="modal-overlay" style="display:none; z-index:9999;">
+        <div class="modal-card" style="width: 400px; padding: 24px; border: none;">
+            <div class="modal-header" style="margin-bottom: 16px;">
+                <h2 id="confirm-dialog-title" style="font-size: 1.2rem; margin: 0;">提示</h2>
+                <button id="close-confirm-dialog-btn" class="close-btn"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <p id="confirm-dialog-msg" style="color: rgba(255,255,255,0.8); margin-bottom: 24px; line-height: 1.5;"></p>
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button id="confirm-dialog-cancel" class="ghost-btn" style="flex: 1; border: none; background: rgba(255,255,255,0.08);">取消</button>
+                <button id="confirm-dialog-ok" class="yellow-btn-small">确定</button>
             </div>
         </div>
     </div>
