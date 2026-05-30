@@ -45,7 +45,7 @@ namespace RouteStar
         private string? _currentInstallDir = null;  // 当前正在下载/已暂停的安装目录
         private string? _currentAppKey = null;       // 当前正在下载的 appKey
 
-        private string GetConfigFilePath()
+        private string GetConfigDirectory()
         {
             string processPath = System.Environment.ProcessPath ?? AppContext.BaseDirectory;
             string exeDir = System.IO.Path.GetDirectoryName(processPath) ?? AppContext.BaseDirectory;
@@ -54,7 +54,12 @@ namespace RouteStar
             {
                 System.IO.Directory.CreateDirectory(configDir);
             }
-            return System.IO.Path.Combine(configDir, "RouteStarConfig.json");
+            return configDir;
+        }
+
+        private string GetConfigFilePath()
+        {
+            return System.IO.Path.Combine(GetConfigDirectory(), "RouteStarConfig.json");
         }
 
         public MainWindow()
@@ -434,7 +439,7 @@ namespace RouteStar
                     else if (actionType == "get_all_gacha_uids")
                     {
                         var result = new List<object>();
-                        var files = Directory.GetFiles(AppContext.BaseDirectory, "gacha_*.json");
+                        var files = Directory.GetFiles(GetConfigDirectory(), "gacha_*.json");
                         foreach (var file in files)
                         {
                             string fileName = Path.GetFileNameWithoutExtension(file);
@@ -453,7 +458,7 @@ namespace RouteStar
                     {
                         string gameBiz = root.GetProperty("gameBiz").GetString();
                         string uid = root.GetProperty("uid").GetString();
-                        string cacheFile = Path.Combine(AppContext.BaseDirectory, $"gacha_{gameBiz}.json");
+                        string cacheFile = Path.Combine(GetConfigDirectory(), $"gacha_{gameBiz}.json");
                         bool success = false;
                         if (File.Exists(cacheFile))
                         {
@@ -476,7 +481,7 @@ namespace RouteStar
                     {
                         // 读取本地缓存，直接返回给前端，不调用 API
                         string gameBiz = root.GetProperty("gameBiz").GetString();
-                        string cacheFile = Path.Combine(AppContext.BaseDirectory, $"gacha_{gameBiz}.json");
+                        string cacheFile = Path.Combine(GetConfigDirectory(), $"gacha_{gameBiz}.json");
                         var cached = LoadGachaCache(cacheFile);
                         if (cached.Count > 0)
                         {
@@ -503,7 +508,7 @@ namespace RouteStar
                         LauncherWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(startResp));
 
                         // 加载本地缓存
-                        string cacheFile = Path.Combine(AppContext.BaseDirectory, $"gacha_{gameBiz}.json");
+                        string cacheFile = Path.Combine(GetConfigDirectory(), $"gacha_{gameBiz}.json");
                         var cachedLogs = LoadGachaCache(cacheFile);
 
                         // 在 C# 后端执行 HTTP 请求，绕过 CORS
