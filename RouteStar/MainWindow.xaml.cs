@@ -45,6 +45,18 @@ namespace RouteStar
         private string? _currentInstallDir = null;  // 当前正在下载/已暂停的安装目录
         private string? _currentAppKey = null;       // 当前正在下载的 appKey
 
+        private string GetConfigFilePath()
+        {
+            string processPath = System.Environment.ProcessPath ?? AppContext.BaseDirectory;
+            string exeDir = System.IO.Path.GetDirectoryName(processPath) ?? AppContext.BaseDirectory;
+            string configDir = System.IO.Path.Combine(exeDir, "config");
+            if (!System.IO.Directory.Exists(configDir))
+            {
+                System.IO.Directory.CreateDirectory(configDir);
+            }
+            return System.IO.Path.Combine(configDir, "RouteStarConfig.json");
+        }
+
         public MainWindow()
         {
             InitializeComponent();
@@ -142,7 +154,7 @@ namespace RouteStar
                     
                 LauncherWebView.CoreWebView2.NavigationCompleted += async (s, ev) => {
                     // 1. 发送配置数据给 JS
-                    string configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "RouteStarConfig.json");
+                    string configPath = GetConfigFilePath();
                     string json = System.IO.File.Exists(configPath) ? System.IO.File.ReadAllText(configPath) : "null";
                     string payload = $"{{\"type\":\"load_config\", \"data\": {json}}}";
                     LauncherWebView.CoreWebView2.PostWebMessageAsJson(payload);
@@ -366,7 +378,7 @@ namespace RouteStar
                                             // 直接写入磁盘，无论 WebView2 是否挂起都能正确保存
                                             try
                                             {
-                                                string cfgPath = Path.Combine(AppContext.BaseDirectory, "RouteStarConfig.json");
+                                                string cfgPath = GetConfigFilePath();
                                                 if (File.Exists(cfgPath))
                                                 {
                                                     var node = JsonNode.Parse(File.ReadAllText(cfgPath));
@@ -415,7 +427,7 @@ namespace RouteStar
                         if (root.TryGetProperty("data", out var dataEl))
                         {
                             string configData = dataEl.GetRawText();
-                            string configPath = Path.Combine(AppContext.BaseDirectory, "RouteStarConfig.json");
+                            string configPath = GetConfigFilePath();
                             File.WriteAllText(configPath, configData);
                         }
                     }
